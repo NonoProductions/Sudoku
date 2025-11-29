@@ -49,7 +49,38 @@ const solveBoard = (board: Board): boolean => {
   return true;
 };
 
-const shuffle = (array: number[]) => {
+// Count the number of solutions to a puzzle (stops at 2 for efficiency)
+const countSolutions = (board: Board, limit: number = 2): number => {
+  let count = 0;
+  
+  const solve = (board: Board): void => {
+    // If we've found enough solutions, stop
+    if (count >= limit) return;
+    
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        if (board[row][col] === BLANK) {
+          for (let num = 1; num <= 9; num++) {
+            if (isValid(board, row, col, num)) {
+              board[row][col] = num;
+              solve(board);
+              board[row][col] = BLANK;
+              if (count >= limit) return; // Stop early if we found enough solutions
+            }
+          }
+          return; // No valid number found for this cell
+        }
+      }
+    }
+    // If we get here, the board is completely filled (a solution)
+    count++;
+  };
+  
+  solve(board);
+  return count;
+};
+
+const shuffle = <T,>(array: T[]): void => {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [array[i], array[j]] = [array[j], array[i]];
@@ -75,15 +106,45 @@ export const generateSudoku = (difficulty: Difficulty): { initial: Board; solved
     case 'Sandy': cluesToRemove = 60; break;
   }
 
-  while (cluesToRemove > 0) {
-    let row = Math.floor(Math.random() * 9);
-    let col = Math.floor(Math.random() * 9);
-    while (initial[row][col] === BLANK) {
-      row = Math.floor(Math.random() * 9);
-      col = Math.floor(Math.random() * 9);
+  // Get all filled cells and shuffle them for random removal
+  const filledCells: { row: number; col: number }[] = [];
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      if (initial[row][col] !== BLANK) {
+        filledCells.push({ row, col });
+      }
     }
-    initial[row][col] = BLANK;
-    cluesToRemove--;
+  }
+  shuffle(filledCells);
+
+  let removed = 0;
+  let attempts = 0;
+  const maxAttempts = filledCells.length * 2; // Prevent infinite loops
+
+  while (removed < cluesToRemove && attempts < maxAttempts) {
+    attempts++;
+    
+    // Try to remove from shuffled list
+    if (filledCells.length === 0) break;
+    
+    const cell = filledCells.pop()!;
+    if (initial[cell.row][cell.col] === BLANK) continue;
+    
+    // Save the value before removing
+    const savedValue = initial[cell.row][cell.col];
+    initial[cell.row][cell.col] = BLANK;
+    
+    // Check if puzzle still has exactly one solution
+    const testBoard = initial.map(row => [...row]);
+    const solutionCount = countSolutions(testBoard, 2);
+    
+    if (solutionCount === 1) {
+      // Valid removal - puzzle is still uniquely solvable
+      removed++;
+    } else {
+      // Invalid removal - restore the value
+      initial[cell.row][cell.col] = savedValue;
+    }
   }
 
   return { initial, solved };

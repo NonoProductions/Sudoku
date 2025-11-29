@@ -16,7 +16,6 @@ import {
   Undo2,
   Menu,
   CalendarDays,
-  ListOrdered,
 } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 
@@ -61,12 +60,34 @@ type DailyAttemptRow = {
   puzzle_date: string | null;
 };
 
+type TeamMember = {
+  id: string;
+  name: string | null;
+};
+
+type TeamProgressEntry = {
+  playerName: string;
+  timerSeconds: number;
+  livesRemaining: number;
+  completionPercent: number;
+  status: string;
+  updatedAt: string | null;
+};
+
 type AttemptSummary = {
   playerName: string;
   durationSeconds: number | null;
   mistakes: number | null;
   points: number | null;
   submittedAt: string | null;
+};
+
+const getLocalDateString = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 const App: React.FC = () => {
@@ -84,7 +105,11 @@ const App: React.FC = () => {
   const [cellFeedback, setCellFeedback] = useState<Record<string, 'correct' | 'wrong'>>({});
   const [showDifficultyOptions, setShowDifficultyOptions] = useState(false);
   const [playerName, setPlayerName] = useState(() => localStorage.getItem('sudoku-player') ?? '');
-  const [friendName, setFriendName] = useState(() => localStorage.getItem('sudoku-friend') ?? '');
+  const [isNameLocked, setIsNameLocked] = useState(() => {
+    const locked = localStorage.getItem('sudoku-name-locked');
+    const savedName = localStorage.getItem('sudoku-player');
+    return locked === 'true' || (savedName !== null && savedName.trim().length > 0);
+  });
   const [profileId] = useState(() => {
     const existing = localStorage.getItem('sudoku-profile-id');
     if (existing) return existing;
@@ -112,10 +137,30 @@ const App: React.FC = () => {
   const [todayResultsError, setTodayResultsError] = useState<string | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [teamCode, setTeamCode] = useState<string | null>(null);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [teamProgress, setTeamProgress] = useState<Map<string, TeamProgressEntry>>(() => new Map());
+  const [teamProgressError, setTeamProgressError] = useState<string | null>(null);
   const attemptSubmittedRef = useRef(false);
+  const boardRef = useRef<Cell[][]>([]);
+  const currentPuzzleIdRef = useRef<string | null>(null);
+  const isDailyModeRef = useRef(false);
+  const gameStateRef = useRef<GameState>('playing');
+  const timerRef = useRef(0);
+  const livesRef = useRef(3);
+  const completionPercentRef = useRef(0);
+  const statusRef = useRef('Noch nicht gestartet');
+  const teammateName = useMemo(() => {
+    if (!teamMembers.length) return '';
+    const teammate = teamMembers.find((member) => member.id !== profileId);
+    return teammate?.name?.trim() ?? '';
+  }, [teamMembers, profileId]);
   const expectedPlayers = useMemo(
-    () => [playerName.trim(), friendName.trim()].filter((name) => name.length > 0),
-    [playerName, friendName],
+    () => [playerName.trim(), teammateName.trim()].filter((name) => name.length > 0),
+    [playerName, teammateName],
   );
   const todaysResultMap = useMemo(() => {
     const map = new Map<string, AttemptSummary>();
@@ -126,16 +171,40 @@ const App: React.FC = () => {
   }, [todayResults]);
 
   useEffect(() => {
-    if (playerName) {
-      localStorage.setItem('sudoku-player', playerName);
-    }
-  }, [playerName]);
+    boardRef.current = board;
+  }, [board]);
 
   useEffect(() => {
-    if (friendName) {
-      localStorage.setItem('sudoku-friend', friendName);
+    currentPuzzleIdRef.current = puzzleMeta.id;
+  }, [puzzleMeta.id]);
+
+  useEffect(() => {
+    isDailyModeRef.current = isDailyMode;
+  }, [isDailyMode]);
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
+    timerRef.current = timer;
+  }, [timer]);
+
+  useEffect(() => {
+    livesRef.current = lives;
+  }, [lives]);
+
+
+  useEffect(() => {
+    if (playerName && playerName.trim().length > 0) {
+      localStorage.setItem('sudoku-player', playerName);
+      // Lock the name once it's been set
+      if (!isNameLocked) {
+        setIsNameLocked(true);
+        localStorage.setItem('sudoku-name-locked', 'true');
+      }
     }
-  }, [friendName]);
+  }, [playerName, isNameLocked]);
 
   const syncProfileFromSupabase = useCallback(async () => {
     if (!profileId) return;
@@ -144,13 +213,17 @@ const App: React.FC = () => {
     try {
       const { data, error } = await supabase
         .from('player_profiles')
-        .select('player_name, friend_name')
+        .select('player_name, team_code')
         .eq('id', profileId)
         .maybeSingle();
       if (error) throw error;
       if (data) {
-        if (data.player_name) setPlayerName(data.player_name);
-        if (data.friend_name) setFriendName(data.friend_name);
+        if (data.player_name) {
+          setPlayerName(data.player_name);
+          setIsNameLocked(true);
+          localStorage.setItem('sudoku-name-locked', 'true');
+        }
+        setTeamCode((data as { team_code?: string | null }).team_code ?? null);
       }
     } catch (err) {
       console.error(err);
@@ -172,7 +245,7 @@ const App: React.FC = () => {
           {
             id: profileId,
             player_name: playerName || null,
-            friend_name: friendName || null,
+            team_code: teamCode || null,
           },
           { onConflict: 'id' },
         );
@@ -183,7 +256,159 @@ const App: React.FC = () => {
       }
     }, 800);
     return () => window.clearTimeout(timeout);
-  }, [playerName, friendName, profileId]);
+  }, [playerName, profileId, teamCode]);
+
+  const fetchTeamMembers = useCallback(
+    async (code: string) => {
+      setTeamError(null);
+      setTeamLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('player_profiles')
+          .select('id, player_name')
+          .eq('team_code', code);
+        if (error) throw error;
+        const members: TeamMember[] =
+          data?.map((profile) => ({
+            id: profile.id as string,
+            name: profile.player_name ?? null,
+          })) ?? [];
+        setTeamMembers(members);
+      } catch (err) {
+        console.error(err);
+        setTeamMembers([]);
+        setTeamError('Team konnte nicht geladen werden.');
+      } finally {
+        setTeamLoading(false);
+      }
+    },
+    [setTeamMembers],
+  );
+
+  useEffect(() => {
+    if (!teamCode) {
+      setTeamMembers([]);
+      return;
+    }
+    fetchTeamMembers(teamCode);
+  }, [teamCode, fetchTeamMembers]);
+
+  const generateUniqueTeamCode = useCallback(async () => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = String(Math.floor(1000 + Math.random() * 9000));
+      const { count, error } = await supabase
+        .from('player_profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('team_code', candidate);
+      if (error) throw error;
+      if (!count) return candidate;
+    }
+    throw new Error('Konnte keinen freien Team-Code erzeugen.');
+  }, []);
+
+  const handleCreateTeam = useCallback(async () => {
+    if (!playerName.trim()) {
+      setTeamError('Trage zuerst deinen Namen ein.');
+      return;
+    }
+    setTeamError(null);
+    setTeamLoading(true);
+    try {
+      const code = await generateUniqueTeamCode();
+      await supabase.from('player_profiles').upsert(
+        {
+          id: profileId,
+          player_name: playerName.trim(),
+          team_code: code,
+        },
+        { onConflict: 'id' },
+      );
+      setTeamCode(code);
+      setJoinCodeInput('');
+    } catch (err) {
+      console.error(err);
+      setTeamError('Team konnte nicht erstellt werden.');
+    } finally {
+      setTeamLoading(false);
+    }
+  }, [generateUniqueTeamCode, playerName, profileId]);
+
+  const handleJoinTeam = useCallback(async () => {
+    if (!playerName.trim()) {
+      setTeamError('Trage zuerst deinen Namen ein.');
+      return;
+    }
+    const sanitized = joinCodeInput.trim();
+    if (!/^\d{4}$/.test(sanitized)) {
+      setTeamError('Team-Code muss aus 4 Ziffern bestehen.');
+      return;
+    }
+    if (teamCode === sanitized) {
+      setTeamError('Du bist bereits in diesem Team.');
+      return;
+    }
+    setTeamError(null);
+    setTeamLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('player_profiles')
+        .select('id, player_name')
+        .eq('team_code', sanitized);
+      if (error) throw error;
+      const members = data ?? [];
+      if (!members.length) {
+        setTeamError('Kein Team mit diesem Code gefunden.');
+        return;
+      }
+      if (members.some((member) => member.id === profileId)) {
+        setTeamCode(sanitized);
+        setTeamError('Du bist diesem Team bereits beigetreten.');
+        return;
+      }
+      if (members.length >= 2) {
+        setTeamError('Dieses Team ist bereits voll.');
+        return;
+      }
+      await supabase.from('player_profiles').upsert(
+        {
+          id: profileId,
+          player_name: playerName.trim(),
+          team_code: sanitized,
+        },
+        { onConflict: 'id' },
+      );
+      setTeamCode(sanitized);
+      setJoinCodeInput('');
+    } catch (err) {
+      console.error(err);
+      setTeamError('Team konnte nicht beigetreten werden.');
+    } finally {
+      setTeamLoading(false);
+    }
+  }, [joinCodeInput, playerName, profileId, teamCode]);
+
+  const handleLeaveTeam = useCallback(async () => {
+    if (!teamCode) return;
+    setTeamError(null);
+    setTeamLoading(true);
+    try {
+      await supabase.from('player_profiles').upsert(
+        {
+          id: profileId,
+          player_name: playerName.trim() || null,
+          team_code: null,
+        },
+        { onConflict: 'id' },
+      );
+      setTeamCode(null);
+      setTeamMembers([]);
+    } catch (err) {
+      console.error(err);
+      setTeamError('Team konnte nicht verlassen werden.');
+    } finally {
+      setTeamLoading(false);
+    }
+  }, [playerName, profileId, teamCode]);
 
   const applyPuzzleToState = useCallback(
     (
@@ -263,11 +488,48 @@ const App: React.FC = () => {
     [puzzleMeta.id],
   );
 
+  const loadTeamProgress = useCallback(async () => {
+    const targetPuzzleId = puzzleMeta.id;
+    if (!targetPuzzleId || expectedPlayers.length === 0) {
+      setTeamProgress(new Map());
+      return;
+    }
+    setTeamProgressError(null);
+    try {
+      const { data, error } = await supabase
+        .from('daily_progress')
+        .select('player_name, timer_seconds, lives_remaining, completion_percent, status, updated_at')
+        .eq('puzzle_id', targetPuzzleId)
+        .in(
+          'player_name',
+          expectedPlayers.map((name) => name.trim()).filter((name) => name.length > 0),
+        );
+      if (error) throw error;
+      const map = new Map<string, TeamProgressEntry>();
+      data?.forEach((row) => {
+        if (!row.player_name) return;
+        map.set(row.player_name.trim().toLowerCase(), {
+          playerName: row.player_name,
+          timerSeconds: row.timer_seconds ?? 0,
+          livesRemaining: row.lives_remaining ?? 0,
+          completionPercent: row.completion_percent ?? 0,
+          status: row.status ?? 'In Bearbeitung',
+          updatedAt: row.updated_at ?? null,
+        });
+      });
+      setTeamProgress(map);
+    } catch (err) {
+      console.error(err);
+      setTeamProgressError('Fortschritt konnte nicht geladen werden.');
+      setTeamProgress(new Map());
+    }
+  }, [expectedPlayers, puzzleMeta.id]);
+
   const loadDailyPuzzle = useCallback(async (options?: { navigate?: boolean }) => {
     setPuzzleError(null);
     setIsLoadingPuzzle(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getLocalDateString();
       let { data, error } = await supabase
         .from('daily_puzzles')
         .select('id, puzzle_date, initial_grid, solution_grid, difficulty')
@@ -277,19 +539,40 @@ const App: React.FC = () => {
       if (error) throw error;
       let puzzle = data as DailyPuzzleRow | null;
       if (!puzzle) {
-        setHasDailyPuzzle(false);
-        setPuzzleError('Für heute wurde noch kein tägliches Sudoku veröffentlicht.');
-        return;
+        const { data: fallback, error: fallbackError } = await supabase
+          .from('daily_puzzles')
+          .select('id, puzzle_date, initial_grid, solution_grid, difficulty')
+          .order('puzzle_date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (fallbackError) throw fallbackError;
+        puzzle = fallback as DailyPuzzleRow | null;
+        if (!puzzle) {
+          setHasDailyPuzzle(false);
+          setPuzzleError('Für heute wurde noch kein tägliches Sudoku veröffentlicht.');
+          return;
+        }
       }
-      setHasDailyPuzzle(true);
+      setHasDailyPuzzle(puzzle.puzzle_date === today);
 
-      applyPuzzleToState(puzzle.initial_grid, puzzle.solution_grid, {
-        id: puzzle.id,
-        mode: 'daily',
-        date: puzzle.puzzle_date,
-        difficulty: puzzle.difficulty ?? difficulty,
-      });
-      loadTodayResults(puzzle.id);
+      const shouldResumeExisting =
+        boardRef.current.length > 0 &&
+        currentPuzzleIdRef.current === puzzle.id &&
+        isDailyModeRef.current &&
+        gameStateRef.current === 'playing';
+
+      if (shouldResumeExisting) {
+        loadTodayResults(puzzle.id);
+        if (options?.navigate) setView('game');
+      } else {
+        applyPuzzleToState(puzzle.initial_grid, puzzle.solution_grid, {
+          id: puzzle.id,
+          mode: 'daily',
+          date: puzzle.puzzle_date,
+          difficulty: puzzle.difficulty ?? difficulty,
+        });
+        loadTodayResults(puzzle.id);
+      }
     } catch (err) {
       console.error(err);
       setPuzzleError('Konnte das tägliche Sudoku nicht laden.');
@@ -347,7 +630,20 @@ const App: React.FC = () => {
           return a.averageMistakes - b.averageMistakes;
         });
 
-      setLeaderboard(leaderboardRows);
+      // Get all team member names if in a team
+      const relevantNames =
+        teamCode && teamMembers.length > 0
+          ? teamMembers
+              .map((member) => member.name?.trim())
+              .filter((name): name is string => name !== null && name !== undefined && name.length > 0)
+              .map((name) => name.toLowerCase())
+          : [];
+      const filteredRows =
+        relevantNames.length > 0
+          ? leaderboardRows.filter((entry) => relevantNames.includes(entry.playerName.trim().toLowerCase()))
+          : leaderboardRows;
+
+      setLeaderboard(filteredRows);
 
       if (playerName.trim()) {
         const normalized = playerName.trim().toLowerCase();
@@ -383,7 +679,7 @@ const App: React.FC = () => {
     } finally {
       setLeaderboardLoading(false);
     }
-  }, [playerName]);
+  }, [playerName, teamCode, teamMembers]);
 
   const handleSubmitAttempt = useCallback(async () => {
     if (!playerName || !isDailyMode || !puzzleMeta.id || attemptSubmittedRef.current) return;
@@ -412,10 +708,10 @@ const App: React.FC = () => {
   }, [playerName, isDailyMode, puzzleMeta, timer, mistakes, loadTodayResults]);
 
   useEffect(() => {
-    if (gameState !== 'playing') return;
+    if (gameState !== 'playing' || view === 'menu') return;
     const interval = window.setInterval(() => setTimer((t) => t + 1), 1000);
     return () => window.clearInterval(interval);
-  }, [gameState]);
+  }, [gameState, view]);
 
   useEffect(() => {
     loadDailyPuzzle();
@@ -434,10 +730,49 @@ const App: React.FC = () => {
   }, [view, puzzleMeta.id, loadTodayResults]);
 
   useEffect(() => {
+    if (!puzzleMeta.id || expectedPlayers.length === 0) return;
+
+    loadTeamProgress();
+    const interval = window.setInterval(() => {
+      loadTeamProgress();
+    }, 1000);
+
+    const channel = supabase
+      .channel(`daily-progress-${puzzleMeta.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'daily_progress',
+          filter: `puzzle_id=eq.${puzzleMeta.id}`,
+        },
+        (payload) => {
+          const player =
+            (payload.new as { player_name?: string } | null)?.player_name ??
+            (payload.old as { player_name?: string } | null)?.player_name;
+          if (!player) return;
+          const normalized = player.trim().toLowerCase();
+          if (!expectedPlayers.some((name) => name.trim().toLowerCase() === normalized)) {
+            return;
+          }
+          loadTeamProgress();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      window.clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [puzzleMeta.id, expectedPlayers, loadTeamProgress]);
+
+  useEffect(() => {
     if (gameState === 'won') {
       handleSubmitAttempt();
     }
   }, [gameState, handleSubmitAttempt]);
+
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -572,6 +907,76 @@ const App: React.FC = () => {
     return availability;
   }, [board, solvedBoard]);
 
+  const { correctPlacements, totalPlacements } = useMemo(() => {
+    if (!board.length) return { correctPlacements: 0, totalPlacements: 0 };
+    let correct = 0;
+    let total = 0;
+    for (let r = 0; r < board.length; r++) {
+      for (let c = 0; c < board[r].length; c++) {
+        const cell = board[r][c];
+        if (!cell || cell.isInitial) continue;
+        total += 1;
+        if (cell.value !== 0 && solvedBoard[r]?.[c] === cell.value) {
+          correct += 1;
+        }
+      }
+    }
+    return { correctPlacements: correct, totalPlacements: total };
+  }, [board, solvedBoard]);
+
+  const completionPercent = useMemo(() => {
+    if (!totalPlacements) return 0;
+    return Math.round((correctPlacements / totalPlacements) * 100);
+  }, [correctPlacements, totalPlacements]);
+
+  useEffect(() => {
+    completionPercentRef.current = completionPercent;
+  }, [completionPercent]);
+
+  const dailyStatusLabel = useMemo(() => {
+    if (!isDailyMode || !puzzleMeta.id) return 'Noch nicht gestartet';
+    if (gameState === 'won') return 'Abgeschlossen';
+    if (gameState === 'lost') return 'Aufgegeben';
+    if (timer > 0) return 'In Bearbeitung';
+    return 'Gestartet';
+  }, [gameState, isDailyMode, puzzleMeta.id, timer]);
+
+  useEffect(() => {
+    statusRef.current = dailyStatusLabel;
+  }, [dailyStatusLabel]);
+
+  useEffect(() => {
+    if (!playerName.trim() || !isDailyMode || !puzzleMeta.id || !solvedBoard.length) return;
+
+    let cancelled = false;
+    const syncProgress = async () => {
+      if (cancelled) return;
+      try {
+        await supabase.from('daily_progress').upsert(
+          {
+            player_name: playerName.trim(),
+            puzzle_id: puzzleMeta.id,
+            timer_seconds: timerRef.current,
+            lives_remaining: livesRef.current,
+            completion_percent: completionPercentRef.current,
+            status: statusRef.current,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'player_name,puzzle_id' },
+        );
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    syncProgress();
+    const interval = window.setInterval(syncProgress, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [playerName, isDailyMode, puzzleMeta.id, solvedBoard.length]);
+
   if (view === 'menu') {
     return (
       <div className="min-h-screen w-full bg-slate-50 text-slate-900">
@@ -596,42 +1001,120 @@ const App: React.FC = () => {
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm">
-            <div className="flex flex-col gap-3">
-              <h2 className="text-lg font-semibold text-slate-900">Spieler</h2>
-              <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-5">
+              <div className="space-y-3">
+                <h2 className="text-lg font-semibold text-slate-900">Spieler</h2>
                 <div className="space-y-2">
                   <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Dein Name</label>
                   <input
                     type="text"
                     value={playerName}
-                    onChange={(e) => setPlayerName(e.target.value)}
+                    onChange={(e) => {
+                      if (!isNameLocked) {
+                        setPlayerName(e.target.value);
+                      }
+                    }}
+                    disabled={isNameLocked}
                     placeholder="Spieler 1"
-                    className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    className={`w-full rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 ${
+                      isNameLocked ? 'bg-slate-100 cursor-not-allowed opacity-75' : ''
+                    }`}
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Name deiner Freundin
-                  </label>
-                  <input
-                    type="text"
-                    value={friendName}
-                    onChange={(e) => setFriendName(e.target.value)}
-                    placeholder="Spieler 2"
-                    className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
-                  />
-                </div>
+                {profileLoading ? (
+                  <p className="text-xs text-slate-400">Synchronisiere Profil…</p>
+                ) : profileError ? (
+                  <p className="text-xs text-rose-500">{profileError}</p>
+                ) : (
+                  <p className="text-xs text-emerald-600">Profil synchronisiert ✅</p>
+                )}
               </div>
-              <p className="text-xs text-slate-500">
-                Die Namen werden automatisch lokal und in Supabase gespeichert, damit sie dauerhaft verfügbar sind.
-              </p>
-              {profileLoading ? (
-                <p className="text-xs text-slate-400">Synchronisiere Profil…</p>
-              ) : profileError ? (
-                <p className="text-xs text-rose-500">{profileError}</p>
-              ) : (
-                <p className="text-xs text-emerald-600">Profil synchronisiert ✅</p>
-              )}
+
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Team</p>
+                    <p className="text-xs text-slate-500">Maximal zwei Personen teilen sich einen Code.</p>
+                  </div>
+                  {teamCode && (
+                    <button
+                      onClick={handleLeaveTeam}
+                      disabled={teamLoading}
+                      className="text-xs font-semibold text-rose-600 transition hover:text-rose-500 disabled:opacity-60"
+                    >
+                      Team verlassen
+                    </button>
+                  )}
+                </div>
+                {teamError && <p className="mt-2 text-xs text-rose-500">{teamError}</p>}
+                {teamCode ? (
+                  <div className="mt-3 space-y-3">
+                    <p className="text-sm text-slate-600">
+                      Dein Code:{' '}
+                      <span className="font-mono text-base font-semibold text-slate-900 tracking-widest">
+                        {teamCode}
+                      </span>
+                    </p>
+                    {teamLoading ? (
+                      <p className="text-xs text-slate-400">Synchronisiere Team…</p>
+                    ) : (
+                      <div className="space-y-2 rounded-2xl border border-slate-100 bg-white p-3">
+                        {teamMembers.length ? (
+                          teamMembers.map((member) => (
+                            <div key={member.id} className="flex items-center justify-between text-sm">
+                              <span className="font-semibold text-slate-900">
+                                {member.name ?? 'Unbekannt'} {member.id === profileId ? '(Du)' : ''}
+                              </span>
+                              <span className="text-xs uppercase tracking-wide text-slate-400">
+                                {member.id === profileId ? 'Host' : 'Partner'}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-xs text-slate-500">Noch keine Mitglieder.</p>
+                        )}
+                      </div>
+                    )}
+                    {!teammateName && (
+                      <p className="text-xs text-amber-600">
+                        Teile den Code mit deiner Partnerin, damit sie beitreten kann.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    <button
+                      onClick={handleCreateTeam}
+                      disabled={teamLoading}
+                      className="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition disabled:opacity-60"
+                    >
+                      {teamLoading ? 'Lädt…' : 'Team erstellen'}
+                    </button>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Team-Code eingeben
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={joinCodeInput}
+                          maxLength={4}
+                          onChange={(e) => setJoinCodeInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                          placeholder="1234"
+                          className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-center text-lg font-semibold tracking-widest text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        />
+                        <button
+                          onClick={handleJoinTeam}
+                          disabled={teamLoading || joinCodeInput.length !== 4}
+                          className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-white disabled:opacity-60"
+                        >
+                          Beitreten
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </section>
 
@@ -680,22 +1163,55 @@ const App: React.FC = () => {
                 </p>
               </div>
             </div>
+            <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Aktueller Stand</p>
+                  <p className="text-base font-semibold text-slate-900">{dailyStatusLabel}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Aktuelle Zeit</p>
+                  <p className="text-sm font-semibold text-slate-900">{formatTime(timer)}</p>
+                </div>
+              </div>
+              {isDailyMode && solvedBoard.length ? (
+                <>
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between text-xs uppercase tracking-wide text-slate-400">
+                      <span>Fortschritt</span>
+                      <span>{completionPercent}%</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-amber-500 transition-all"
+                        style={{ width: `${completionPercent}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {correctPlacements} / {totalPlacements || 0} Felder gelöst
+                    </p>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between text-sm">
+                    <span className="text-xs uppercase tracking-wide text-slate-400">Verbleibende Leben</span>
+                    <span className="flex items-center gap-1 font-semibold text-slate-900">
+                      <Heart className="h-3.5 w-3.5 text-rose-500" />
+                      {lives}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-4 text-sm text-slate-500">
+                  Starte das heutige Sudoku, um Fortschritt, Zeit und Leben zu verfolgen.
+                </p>
+              )}
+            </div>
             {puzzleError && (
               <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{puzzleError}</p>
             )}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-slate-900">Heutige Ergebnisse</h2>
-              <button
-                onClick={() => loadTodayResults()}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:bg-slate-50"
-              >
-                <ListOrdered className="h-4 w-4" />
-                Refresh
-              </button>
-            </div>
+            <h2 className="text-lg font-semibold text-slate-900">Heutige Ergebnisse</h2>
             <div className="mt-4 space-y-3">
               {todayResultsLoading ? (
                 <p className="text-sm text-slate-500">Lade Ergebnisse…</p>
@@ -703,12 +1219,13 @@ const App: React.FC = () => {
                 <p className="text-sm text-rose-500">{todayResultsError}</p>
               ) : expectedPlayers.length === 0 ? (
                 <p className="text-sm text-slate-500">
-                  Trage eure beiden Namen ein, damit ihr euch gegenseitig seht.
+                  Trage deinen Namen ein und erstelle ein Team, um eure Ergebnisse zu vergleichen.
                 </p>
               ) : (
                 expectedPlayers.map((name) => {
                   const normalized = name.trim().toLowerCase();
                   const entry = todaysResultMap.get(normalized);
+                  const progress = teamProgress.get(normalized);
                   return (
                     <div
                       key={name}
@@ -720,6 +1237,11 @@ const App: React.FC = () => {
                           <p className="text-xs text-slate-500">
                             Fertig in {entry.durationSeconds ? formatTime(entry.durationSeconds) : '—'} · Fehler{' '}
                             {entry.mistakes ?? 0} · {entry.points ?? 0} Punkte
+                          </p>
+                        ) : progress ? (
+                          <p className="text-xs text-slate-500">
+                            {progress.status} · {formatTime(progress.timerSeconds)} · {progress.completionPercent}% ·
+                            Leben {progress.livesRemaining}
                           </p>
                         ) : (
                           <p className="text-xs text-slate-500">Noch kein Ergebnis eingegangen</p>
@@ -738,7 +1260,14 @@ const App: React.FC = () => {
                 })
               )}
             </div>
-            {expectedPlayers.length === 2 &&
+              {teamProgressError && (
+                <p className="mt-3 text-xs text-rose-500">{teamProgressError}</p>
+              )}
+              {teamCode && !teammateName && (
+              <p className="mt-3 text-xs text-amber-600">Dein Team ist noch nicht vollständig.</p>
+            )}
+            {teamCode &&
+              expectedPlayers.length === 2 &&
               expectedPlayers.some(
                 (name) => !todaysResultMap.get(name.trim().toLowerCase()),
               ) && (
@@ -749,16 +1278,10 @@ const App: React.FC = () => {
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-slate-900">Leaderboard</h2>
-              <button
-                onClick={loadLeaderboard}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:bg-slate-50"
-              >
-                <ListOrdered className="h-4 w-4" />
-                Aktualisieren
-              </button>
-            </div>
+            <h2 className="text-lg font-semibold text-slate-900">Leaderboard</h2>
+            {teamCode && (
+              <p className="mt-2 text-xs text-slate-500">Es werden nur die Spieler aus deinem Team angezeigt.</p>
+            )}
             <div className="mt-4">
               {leaderboardLoading ? (
                 <p className="text-sm text-slate-500">Lädt Rangliste…</p>
@@ -766,7 +1289,9 @@ const App: React.FC = () => {
                 <p className="text-sm text-rose-500">{leaderboardError}</p>
               ) : leaderboard.length === 0 ? (
                 <p className="text-sm text-slate-500">
-                  Noch keine Einträge – spielt zuerst ein tägliches Sudoku durch.
+                  {teamCode
+                    ? 'Noch keine Einträge für euer Team – spielt zuerst ein tägliches Sudoku durch.'
+                    : 'Noch keine Einträge – spielt zuerst ein tägliches Sudoku durch.'}
                 </p>
               ) : (
                 <ul className="space-y-3">
