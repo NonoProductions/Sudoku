@@ -1,6 +1,7 @@
 
 export type Board = number[][];
 export type Difficulty = 'Beginner' | 'Easy' | 'Medium' | 'Hard' | 'Sandy';
+export type GameMode = Difficulty | 'Täglisches Sodoku';
 
 const BLANK = 0;
 
