@@ -20,6 +20,73 @@ import {
 } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 
+// Login Form Component
+const LoginForm: React.FC<{ onLogin: (username: PlayerName, password: string) => boolean }> = ({ onLogin }) => {
+  const [username, setUsername] = useState<PlayerName>('Noe');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (onLogin(username, password)) {
+      // Success handled by parent
+    } else {
+      setError('Falsches Passwort');
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label className="block text-sm font-semibold uppercase tracking-wide text-slate-500 mb-2">
+          Spieler
+        </label>
+        <select
+          value={username}
+          onChange={(e) => setUsername(e.target.value as PlayerName)}
+          className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        >
+          <option value="Noe">Noe</option>
+          <option value="Sandy">Sandy</option>
+        </select>
+      </div>
+      <div>
+        <label className="block text-sm font-semibold uppercase tracking-wide text-slate-500 mb-2">
+          Passwort
+        </label>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Passwort"
+          className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+          autoFocus
+        />
+      </div>
+      {error && (
+        <p className="text-sm text-rose-500">{error}</p>
+      )}
+      <button
+        type="submit"
+        className="w-full rounded-xl px-4 py-3 text-base font-semibold text-white transition"
+        style={{
+          backgroundColor: username === 'Sandy' ? '#d4a55e' : (username === 'Noe' ? '#3f3f3f' : '#0f172a'),
+          borderColor: username === 'Sandy' ? '#d4a55e' : (username === 'Noe' ? '#53cd69' : '#0f172a'),
+        } as React.CSSProperties}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.setProperty('background-color', username === 'Sandy' ? '#c1944d' : (username === 'Noe' ? '#3f3f3f' : '#1e293b'), 'important');
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.setProperty('background-color', username === 'Sandy' ? '#d4a55e' : (username === 'Noe' ? '#3f3f3f' : '#0f172a'), 'important');
+        }}
+      >
+        Anmelden
+      </button>
+    </form>
+  );
+};
+
 type GameState = 'playing' | 'won' | 'lost';
 type Cell = {
   value: number;
@@ -150,6 +217,37 @@ const loadFreePlayState = (): FreePlayState | null => {
   }
 };
 
+// Login credentials
+const PLAYERS = {
+  'Noe': 'Sandy',
+  'Sandy': 'Nono',
+} as const;
+
+type PlayerName = keyof typeof PLAYERS;
+
+// Color theme helper function
+const getThemeColors = (playerName: string) => {
+  if (playerName === 'Sandy') {
+    return {
+      primary: '#d4a55e',    // Gold für Buttons/Akzente
+      dark: '#29274c',       // space-indigo für dunkle Elemente
+      accent: '#d295bf',     // lilac für Highlights
+      background: '#edafb8', // Hintergrund für Sandy
+      overlay: '#29274c',    // space-indigo für Overlays
+      textDark: '#012a36',   // jet-black für Text
+    };
+  }
+  // Default colors for Noe (slate theme)
+  return {
+    primary: '#0f172a',      // slate-900
+    dark: '#0f172a',         // slate-900
+    accent: '#f59e0b',       // amber-500
+    background: '#282828',   // dark background for Noe
+    overlay: '#0f172a',      // slate-900
+    textDark: '#0f172a',     // slate-900
+  };
+};
+
 const App: React.FC = () => {
   const gameModes: GameMode[] = ['Beginner', 'Easy', 'Medium', 'Hard', 'Sandy', 'Täglisches Sodoku'];
   const [selectedMode, setSelectedMode] = useState<GameMode>('Medium');
@@ -165,12 +263,19 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<Cell[][][]>([]);
   const [cellFeedback, setCellFeedback] = useState<Record<string, 'correct' | 'wrong'>>({});
   const [showDifficultyOptions, setShowDifficultyOptions] = useState(false);
-  const [playerName, setPlayerName] = useState(() => localStorage.getItem('sudoku-player') ?? '');
-  const [isNameLocked, setIsNameLocked] = useState(() => {
-    const locked = localStorage.getItem('sudoku-name-locked');
-    const savedName = localStorage.getItem('sudoku-player');
-    return locked === 'true' || (savedName !== null && savedName.trim().length > 0);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    const saved = localStorage.getItem('sudoku-authenticated');
+    const savedPlayer = localStorage.getItem('sudoku-player');
+    return saved === 'true' && (savedPlayer === 'Noe' || savedPlayer === 'Sandy');
   });
+  const [playerName, setPlayerName] = useState(() => {
+    const saved = localStorage.getItem('sudoku-player');
+    if (saved === 'Noe' || saved === 'Sandy') {
+      return saved;
+    }
+    return '';
+  });
+  const [isNameLocked, setIsNameLocked] = useState(true);
   const [profileId] = useState(() => {
     const existing = localStorage.getItem('sudoku-profile-id');
     if (existing) return existing;
@@ -204,11 +309,8 @@ const App: React.FC = () => {
   const [teamError, setTeamError] = useState<string | null>(null);
   const [teamProgress, setTeamProgress] = useState<Map<string, TeamProgressEntry>>(() => new Map());
   const [teamProgressError, setTeamProgressError] = useState<string | null>(null);
-  const [teamNameInput, setTeamNameInput] = useState('');
-  const [player2NameInput, setPlayer2NameInput] = useState('');
-  const [teamPlayerNames, setTeamPlayerNames] = useState<{ player1: string; player2: string } | null>(null);
-  const [showTeamCreateForm, setShowTeamCreateForm] = useState(false);
-  const [isPlayerInTeam, setIsPlayerInTeam] = useState(false);
+  const [teamPlayerNames, setTeamPlayerNames] = useState<{ player1: string; player2: string }>({ player1: 'Noe', player2: 'Sandy' });
+  const [isPlayerInTeam, setIsPlayerInTeam] = useState(true);
   const attemptSubmittedRef = useRef(false);
   const boardRef = useRef<Cell[][]>([]);
   const currentPuzzleIdRef = useRef<string | null>(null);
@@ -224,22 +326,15 @@ const App: React.FC = () => {
     return teammate?.name?.trim() ?? '';
   }, [teamMembers, profileId]);
   
+  // Get theme colors based on player
+  const themeColors = useMemo(() => getThemeColors(playerName), [playerName]);
+  
   // WICHTIG: expectedPlayers sollte direkt aus teamPlayerNames kommen, 
   // da das die autoritative Quelle für die beiden Spielernamen im Team ist
   const expectedPlayers = useMemo(() => {
-    // Wenn teamPlayerNames gesetzt ist, verwende diese (sind die autoritativen Namen)
-    if (teamPlayerNames) {
-      const players = [
-        teamPlayerNames.player1.trim(),
-        teamPlayerNames.player2.trim()
-      ].filter((name) => name.length > 0);
-      if (players.length === 2) {
-        return players;
-      }
-    }
-    // Fallback: Verwende playerName und teammateName (für Kompatibilität)
-    return [playerName.trim(), teammateName.trim()].filter((name) => name.length > 0);
-  }, [playerName, teammateName, teamPlayerNames]);
+    // Always return Noe and Sandy
+    return ['Noe', 'Sandy'];
+  }, []);
   const todaysResultMap = useMemo(() => {
     const map = new Map<string, AttemptSummary>();
     todayResults.forEach((result) => {
@@ -279,195 +374,100 @@ const App: React.FC = () => {
     }
   }, [playerName]);
 
+  const handleLogin = useCallback((username: PlayerName, password: string) => {
+    if (PLAYERS[username] === password) {
+      setIsAuthenticated(true);
+      setPlayerName(username);
+      setIsPlayerInTeam(true);
+      setIsNameLocked(true);
+      localStorage.setItem('sudoku-authenticated', 'true');
+      localStorage.setItem('sudoku-player', username);
+      localStorage.setItem('sudoku-name-locked', 'true');
+      
+      // Auto-setup team
+      const teamNameValue = 'Noe & Sandy';
+      setTeamName(teamNameValue);
+      setTeamPlayerNames({ player1: 'Noe', player2: 'Sandy' });
+      
+      // Save to Supabase immediately to ensure correct player name is stored
+      // This ensures Supabase knows which player is logged in
+      if (profileId) {
+        supabase.from('player_profiles').upsert(
+          {
+            id: profileId,
+            player_name: username, // Always use login name - this is critical for correct data storage
+            team_name: teamNameValue,
+            team_player1: 'Noe',
+            team_player2: 'Sandy',
+          },
+          { onConflict: 'id' },
+        ).then(({ error }) => {
+          if (error) console.error('Error saving profile:', error);
+        });
+      }
+      return true;
+    }
+    return false;
+  }, [profileId]);
+
   const syncProfileFromSupabase = useCallback(async () => {
-    if (!profileId) return;
+    if (!profileId || !isAuthenticated) return;
     setProfileLoading(true);
     setProfileError(null);
     try {
+      // Get current player name from login state (always authoritative)
+      const currentPlayerName = playerName || localStorage.getItem('sudoku-player');
+      if (!currentPlayerName || (currentPlayerName !== 'Noe' && currentPlayerName !== 'Sandy')) {
+        console.warn('No valid player name found');
+        return;
+      }
+
+      // Always set playerName from login state
+      setPlayerName(currentPlayerName as PlayerName);
+      
       const { data, error } = await supabase
         .from('player_profiles')
         .select('player_name, team_name, team_player1, team_player2')
         .eq('id', profileId)
         .maybeSingle();
       if (error) throw error;
-      if (data) {
-        if (data.player_name) {
-          setPlayerName(data.player_name);
-          const teamNameValue = (data as { team_name?: string | null }).team_name;
-          if (teamNameValue) {
-            setTeamName(teamNameValue);
-            setIsPlayerInTeam(true);
-            setIsNameLocked(true);
-            localStorage.setItem('sudoku-name-locked', 'true');
-            const player1 = (data as { team_player1?: string | null }).team_player1;
-            const player2 = (data as { team_player2?: string | null }).team_player2;
-            if (player1 && player2) {
-              setTeamPlayerNames({ player1, player2 });
-            }
-          } else {
-            setIsPlayerInTeam(false);
-          }
-        }
-      }
+      
+      // Always ensure team is set to Noe & Sandy
+      const teamNameValue = 'Noe & Sandy';
+      setTeamName(teamNameValue);
+      setTeamPlayerNames({ player1: 'Noe', player2: 'Sandy' });
+      setIsPlayerInTeam(true);
+      setIsNameLocked(true);
+      localStorage.setItem('sudoku-name-locked', 'true');
+      
+      // ALWAYS update Supabase with current login name - this ensures data is saved correctly
+      await supabase.from('player_profiles').upsert(
+        {
+          id: profileId,
+          player_name: currentPlayerName, // Always use login name, never from Supabase
+          team_name: teamNameValue,
+          team_player1: 'Noe',
+          team_player2: 'Sandy',
+        },
+        { onConflict: 'id' },
+      );
     } catch (err) {
       console.error(err);
       setProfileError('Profil konnte nicht aus Supabase geladen werden.');
     } finally {
       setProfileLoading(false);
     }
-  }, [profileId]);
+  }, [profileId, isAuthenticated, playerName]);
 
   useEffect(() => {
-    syncProfileFromSupabase();
-  }, [syncProfileFromSupabase]);
+    if (isAuthenticated) {
+      syncProfileFromSupabase();
+    }
+  }, [syncProfileFromSupabase, isAuthenticated]);
 
-  // Check if player name exists in a team and auto-login
-  const checkPlayerInTeam = useCallback(async (name: string) => {
-    if (!name.trim()) {
-      setIsPlayerInTeam(false);
-      return;
-    }
-    
-    setTeamLoading(true);
-    try {
-      const trimmedName = name.trim();
-      
-      // First, check if player is already in a team (by player_name)
-      const { data: profilesByName, error: nameError } = await supabase
-        .from('player_profiles')
-        .select('id, player_name, team_name, team_player1, team_player2')
-        .eq('player_name', trimmedName);
-      
-      if (nameError) {
-        // Check if it's a column error
-        if (nameError.message?.includes('column') || nameError.message?.includes('does not exist')) {
-          console.warn('Team-Spalten existieren möglicherweise nicht. Versuche alternative Abfrage...');
-          setIsPlayerInTeam(false);
-          setTeamError(null);
-          setTeamLoading(false);
-          return;
-        }
-        throw nameError;
-      }
-      
-      // Check if player is listed as team_player1 or team_player2 in any team
-      const { data: teamsWithPlayer, error: teamError } = await supabase
-        .from('player_profiles')
-        .select('id, team_name, team_player1, team_player2')
-        .or(`team_player1.eq.${trimmedName},team_player2.eq.${trimmedName}`)
-        .not('team_name', 'is', null);
-      
-      if (teamError) {
-        console.error('Fehler beim Suchen nach Teams:', teamError);
-        // Continue with name-based check
-      }
-      
-      // Find the team this player belongs to
-      let teamData: { team_name: string; team_player1: string; team_player2: string } | null = null;
-      
-      // First, check if player is already logged in with this name
-      const existingProfile = profilesByName?.find(p => {
-        const profile = p as { team_name?: string | null };
-        return profile.team_name && profile.team_name.trim().length > 0;
-      });
-      
-      if (existingProfile) {
-        const profile = existingProfile as { team_name?: string | null; team_player1?: string | null; team_player2?: string | null };
-        if (profile.team_name) {
-          teamData = {
-            team_name: profile.team_name,
-            team_player1: profile.team_player1 || '',
-            team_player2: profile.team_player2 || '',
-          };
-        }
-      } else if (teamsWithPlayer && teamsWithPlayer.length > 0) {
-        // Player is listed in a team but not yet logged in
-        const team = teamsWithPlayer[0];
-        const teamNameValue = (team as { team_name?: string | null }).team_name;
-        const player1 = (team as { team_player1?: string | null }).team_player1 || '';
-        const player2 = (team as { team_player2?: string | null }).team_player2 || '';
-        
-        if (teamNameValue) {
-          teamData = {
-            team_name: teamNameValue,
-            team_player1: player1,
-            team_player2: player2,
-          };
-        }
-      }
-      
-      if (teamData && teamData.team_name) {
-        // Player is in a team - check if already logged in from another device
-        const { data: loggedIn, error: loggedInError } = await supabase
-          .from('player_profiles')
-          .select('id, player_name, team_name')
-          .eq('team_name', teamData.team_name)
-          .eq('player_name', trimmedName);
-        
-        if (loggedInError) {
-          console.error('Fehler beim Prüfen der eingeloggten Spieler:', loggedInError);
-          // Continue anyway
-        } else if (loggedIn && loggedIn.length > 0) {
-          const otherProfile = loggedIn.find(p => p.id !== profileId);
-          if (otherProfile) {
-            // Another profile is already using this name in this team
-            setTeamError(`Der Spieler "${trimmedName}" ist bereits in diesem Team eingeloggt.`);
-            setIsPlayerInTeam(true);
-            setTeamLoading(false);
-            return;
-          }
-        }
-        
-        // Auto-login to existing team
-        const { error: upsertError } = await supabase.from('player_profiles').upsert(
-          {
-            id: profileId,
-            player_name: trimmedName,
-            team_name: teamData.team_name,
-            team_player1: teamData.team_player1 || null,
-            team_player2: teamData.team_player2 || null,
-          },
-          { onConflict: 'id' },
-        );
-        
-        if (upsertError) {
-          console.error('Fehler beim Speichern des Teams:', upsertError);
-          throw upsertError;
-        }
-        
-        setTeamName(teamData.team_name);
-        if (teamData.team_player1 && teamData.team_player2) {
-          setTeamPlayerNames({ player1: teamData.team_player1, player2: teamData.team_player2 });
-        }
-        setIsPlayerInTeam(true);
-        setIsNameLocked(true);
-        localStorage.setItem('sudoku-name-locked', 'true');
-        setTeamError(null);
-      } else {
-        // Player not in any team - allow team creation
-        setTeamName(null);
-        setTeamPlayerNames(null);
-        setIsPlayerInTeam(false);
-        setTeamError(null);
-      }
-    } catch (err: any) {
-      console.error('Fehler beim Prüfen des Spielernamens:', err);
-      const errorMessage = err?.message || err?.error_description || err?.toString() || 'Unbekannter Fehler';
-      
-      // Check if it's a column error
-      if (errorMessage.includes('column') || errorMessage.includes('does not exist') || errorMessage.includes('Could not find')) {
-        setTeamError('Die Datenbankstruktur ist nicht korrekt. Bitte füge die Spalten team_name, team_player1 und team_player2 zur player_profiles Tabelle hinzu.');
-      } else {
-        setTeamError(`Fehler beim Prüfen des Spielernamens: ${errorMessage}`);
-      }
-      setIsPlayerInTeam(false);
-    } finally {
-      setTeamLoading(false);
-    }
-  }, [profileId]);
 
   useEffect(() => {
-    if (!profileId) return;
+    if (!profileId || !isAuthenticated) return;
     const timeout = window.setTimeout(async () => {
       if (playerName && playerName.trim().length > 0 && isNameLocked) {
         try {
@@ -475,9 +475,9 @@ const App: React.FC = () => {
             {
               id: profileId,
               player_name: playerName.trim(),
-              team_name: teamName || null,
-              team_player1: teamPlayerNames?.player1 || null,
-              team_player2: teamPlayerNames?.player2 || null,
+              team_name: teamName || 'Noe & Sandy',
+              team_player1: teamPlayerNames?.player1 || 'Noe',
+              team_player2: teamPlayerNames?.player2 || 'Sandy',
             },
             { onConflict: 'id' },
           );
@@ -489,7 +489,7 @@ const App: React.FC = () => {
       }
     }, 800);
     return () => window.clearTimeout(timeout);
-  }, [playerName, profileId, teamName, teamPlayerNames, isNameLocked]);
+  }, [playerName, profileId, teamName, teamPlayerNames, isNameLocked, isAuthenticated]);
 
   const fetchTeamMembers = useCallback(
     async (teamNameValue: string) => {
@@ -538,119 +538,6 @@ const App: React.FC = () => {
     fetchTeamMembers(teamName);
   }, [teamName, fetchTeamMembers]);
 
-  const handleCreateTeam = useCallback(async () => {
-    const trimmedTeamName = teamNameInput.trim();
-    const trimmedPlayer2 = player2NameInput.trim();
-    const trimmedCurrentPlayer = playerName.trim();
-    
-    if (!trimmedTeamName) {
-      setTeamError('Bitte gib einen Teamnamen ein.');
-      return;
-    }
-    if (!trimmedPlayer2) {
-      setTeamError('Bitte gib den Namen des zweiten Spielers ein.');
-      return;
-    }
-    if (trimmedCurrentPlayer === trimmedPlayer2) {
-      setTeamError('Die Spielernamen müssen unterschiedlich sein.');
-      return;
-    }
-    if (!trimmedCurrentPlayer) {
-      setTeamError('Bitte gib zuerst deinen Namen ein.');
-      return;
-    }
-    
-    setTeamError(null);
-    setTeamLoading(true);
-    try {
-      // Check if team name already exists
-      const { data: existingTeam, error: teamCheckError } = await supabase
-        .from('player_profiles')
-        .select('team_name')
-        .eq('team_name', trimmedTeamName)
-        .limit(1)
-        .maybeSingle();
-      
-      if (teamCheckError) throw teamCheckError;
-      
-      if (existingTeam) {
-        setTeamError(`Ein Team mit dem Namen "${trimmedTeamName}" existiert bereits.`);
-        setTeamLoading(false);
-        return;
-      }
-      
-      // Check if player2 is already in a team
-      const { data: existingPlayer2, error: checkError } = await supabase
-        .from('player_profiles')
-        .select('player_name, team_name')
-        .eq('player_name', trimmedPlayer2)
-        .not('team_name', 'is', null)
-        .limit(1)
-        .maybeSingle();
-      
-      if (checkError) throw checkError;
-      
-      if (existingPlayer2) {
-        setTeamError(`Der Spieler "${trimmedPlayer2}" ist bereits in einem Team.`);
-        setTeamLoading(false);
-        return;
-      }
-      
-      await supabase.from('player_profiles').upsert(
-        {
-          id: profileId,
-          player_name: trimmedCurrentPlayer,
-          team_name: trimmedTeamName,
-          team_player1: trimmedCurrentPlayer,
-          team_player2: trimmedPlayer2,
-        },
-        { onConflict: 'id' },
-      );
-      setTeamName(trimmedTeamName);
-      setTeamPlayerNames({ player1: trimmedCurrentPlayer, player2: trimmedPlayer2 });
-      setIsPlayerInTeam(true);
-      setIsNameLocked(true);
-      localStorage.setItem('sudoku-name-locked', 'true');
-      setTeamNameInput('');
-      setPlayer2NameInput('');
-      setShowTeamCreateForm(false);
-      setTeamError(null);
-    } catch (err) {
-      console.error(err);
-      setTeamError('Team konnte nicht erstellt werden.');
-    } finally {
-      setTeamLoading(false);
-    }
-  }, [teamNameInput, player2NameInput, playerName, profileId]);
-
-
-  const handleLeaveTeam = useCallback(async () => {
-    if (!teamName) return;
-    setTeamError(null);
-    setTeamLoading(true);
-    try {
-      await supabase.from('player_profiles').upsert(
-        {
-          id: profileId,
-          player_name: playerName.trim() || null,
-          team_name: null,
-          team_player1: null,
-          team_player2: null,
-        },
-        { onConflict: 'id' },
-      );
-      setTeamName(null);
-      setTeamMembers([]);
-      setTeamPlayerNames(null);
-      setIsPlayerInTeam(false);
-      setShowTeamCreateForm(false);
-    } catch (err) {
-      console.error(err);
-      setTeamError('Team konnte nicht verlassen werden.');
-    } finally {
-      setTeamLoading(false);
-    }
-  }, [playerName, profileId, teamName]);
 
   const applyPuzzleToState = useCallback(
     (
@@ -1517,22 +1404,64 @@ const App: React.FC = () => {
     };
   }, [playerName, isDailyMode, puzzleMeta.id, solvedBoard.length, saveDailyProgress]);
 
-  if (view === 'menu') {
+  // Show login screen if not authenticated
+  if (!isAuthenticated) {
+    // Use default background for login screen
     return (
-      <div className="min-h-screen w-full bg-slate-50 text-slate-900">
+      <div className="min-h-screen w-full text-slate-900 flex items-center justify-center px-4" style={{ backgroundColor: '#f9fafb' } as React.CSSProperties}>
+        <div 
+          className="w-full max-w-md rounded-2xl border border-slate-200 p-8 shadow-sm"
+          style={{ backgroundColor: '#ffffff' } as React.CSSProperties}
+        >
+          <h1 className="text-2xl font-semibold text-slate-900 mb-2">Sudoku</h1>
+          <p className="text-sm text-slate-500 mb-6">Bitte melde dich an, um zu spielen.</p>
+          <LoginForm onLogin={handleLogin} />
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'menu') {
+    const menuBgColor = playerName === 'Sandy' ? '#edafb8' : (playerName === 'Noe' ? '#282828' : '#f8fafc');
+    return (
+      <div 
+        className="min-h-screen w-full"
+        style={{ 
+          backgroundColor: menuBgColor,
+          color: playerName === 'Noe' ? '#ffffff' : '#0f172a'
+        } as React.CSSProperties}
+      >
         <div className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 px-4 py-6 md:max-w-5xl md:gap-8 md:px-6 md:py-8 lg:max-w-6xl lg:gap-10 lg:px-8">
-          <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8">
+          <section 
+            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
             <div className="flex flex-wrap items-center justify-between gap-4 md:gap-6">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 md:text-sm">Menü</p>
-                <h1 className="text-2xl font-semibold text-slate-900 md:text-3xl lg:text-4xl">Gemeinsames Sudoku</h1>
-                <p className="mt-1 text-sm text-slate-500 md:text-base lg:text-lg">
+                <p className="text-xs font-semibold uppercase tracking-widest md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Menü</p>
+                <h1 className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Gemeinsames Sudoku</h1>
+                <p className="mt-1 text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
                   Hier verwaltest du Namen, tägliche Rätsel und das Leaderboard.
                 </p>
               </div>
               <button
                 onClick={() => setView('game')}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3"
+                className="inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3"
+                style={{
+                  borderColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#94a3b8'),
+                  color: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#64748b'),
+                  backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+                } as React.CSSProperties}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.setProperty('background-color', playerName === 'Sandy' ? '#f5e8f0' : (playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9'), 'important');
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.setProperty('background-color', playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'), 'important');
+                }}
               >
                 <Undo2 className="h-4 w-4 md:h-5 md:w-5" />
                 Zurück zum Spiel
@@ -1540,56 +1469,31 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8">
+          <section 
+            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
             <div className="flex flex-col gap-5 md:gap-6 lg:gap-8">
               <div className="space-y-3 md:space-y-4">
-                <h2 className="text-lg font-semibold text-slate-900 md:text-xl lg:text-2xl">Spieler</h2>
+                <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Spieler</h2>
                 <div className="space-y-2">
                   <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Dein Name</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={playerName}
-                      onChange={(e) => {
-                        const newName = e.target.value;
-                        setPlayerName(newName);
-                        setTeamError(null);
-                        // Reset team status when name changes
-                        if (!isNameLocked) {
-                          setIsPlayerInTeam(false);
-                          setTeamName(null);
-                          setTeamPlayerNames(null);
-                        }
-                      }}
-                      onBlur={() => {
-                        if (playerName.trim() && !isNameLocked) {
-                          checkPlayerInTeam(playerName.trim());
-                        }
-                      }}
-                      disabled={isNameLocked}
+                      readOnly
+                      disabled={true}
                       placeholder="Dein Name"
                       className={`flex-1 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 md:px-4 md:py-3.5 md:text-base lg:px-5 lg:py-4 lg:text-lg ${
                         isNameLocked ? 'bg-slate-100 cursor-not-allowed opacity-75' : ''
                       }`}
                     />
-                    {isNameLocked && (
-                      <button
-                        onClick={() => {
-                          setIsNameLocked(false);
-                          localStorage.removeItem('sudoku-name-locked');
-                          setTeamName(null);
-                          setTeamPlayerNames(null);
-                          setIsPlayerInTeam(false);
-                        }}
-                        className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white md:px-4 md:py-2.5 md:text-sm"
-                      >
-                        Ändern
-                      </button>
-                    )}
                   </div>
-                  {teamLoading && !isNameLocked && playerName.trim() && (
-                    <p className="text-xs text-slate-400">Prüfe Team-Status…</p>
-                  )}
                 </div>
                 {profileLoading ? (
                   <p className="text-xs text-slate-400">Synchronisiere Profil…</p>
@@ -1600,21 +1504,19 @@ const App: React.FC = () => {
                 )}
               </div>
 
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:p-5 lg:p-6">
+              <div 
+                className="rounded-2xl border p-4 md:p-5 lg:p-6"
+                style={{ 
+                  backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                  borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                  color: playerName === 'Noe' ? '#ffffff' : undefined
+                } as React.CSSProperties}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2 md:gap-3">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 md:text-sm">Team</p>
-                    <p className="text-xs text-slate-500 md:text-sm lg:text-base">Maximal zwei Personen pro Team.</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Team</p>
+                    <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Du und dein Partner spielen zusammen.</p>
                   </div>
-                  {teamName && (
-                    <button
-                      onClick={handleLeaveTeam}
-                      disabled={teamLoading}
-                      className="text-xs font-semibold text-rose-600 transition hover:text-rose-500 disabled:opacity-60"
-                    >
-                      Team verlassen
-                    </button>
-                  )}
                 </div>
                 {teamError && <p className="mt-2 text-xs text-rose-500">{teamError}</p>}
                 {teamName ? (
@@ -1625,23 +1527,30 @@ const App: React.FC = () => {
                     {teamLoading ? (
                       <p className="text-xs text-slate-400">Synchronisiere Team…</p>
                     ) : (
-                      <div className="space-y-2 rounded-2xl border border-slate-100 bg-white p-3">
+                      <div 
+                        className="space-y-2 rounded-2xl border p-3"
+                        style={{ 
+                          backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                          borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                          color: playerName === 'Noe' ? '#ffffff' : undefined
+                        } as React.CSSProperties}
+                      >
                         {/* Zeige beide Spieler aus teamPlayerNames an, wenn verfügbar */}
                         {teamPlayerNames ? (
                           <>
                             <div className="flex items-center justify-between text-sm">
-                              <span className="font-semibold text-slate-900">
+                              <span className="font-semibold" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
                                 {teamPlayerNames.player1} {teamPlayerNames.player1.trim().toLowerCase() === playerName.trim().toLowerCase() ? '(Du)' : ''}
                               </span>
-                              <span className="text-xs uppercase tracking-wide text-slate-400">
+                              <span className="text-xs uppercase tracking-wide" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
                                 {teamPlayerNames.player1.trim().toLowerCase() === playerName.trim().toLowerCase() ? 'Du' : 'Partner'}
                               </span>
                             </div>
                             <div className="flex items-center justify-between text-sm">
-                              <span className="font-semibold text-slate-900">
+                              <span className="font-semibold" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
                                 {teamPlayerNames.player2} {teamPlayerNames.player2.trim().toLowerCase() === playerName.trim().toLowerCase() ? '(Du)' : ''}
                               </span>
-                              <span className="text-xs uppercase tracking-wide text-slate-400">
+                              <span className="text-xs uppercase tracking-wide" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
                                 {teamPlayerNames.player2.trim().toLowerCase() === playerName.trim().toLowerCase() ? 'Du' : 'Partner'}
                               </span>
                             </div>
@@ -1687,142 +1596,89 @@ const App: React.FC = () => {
                       </div>
                     )}
                   </div>
-                ) : !playerName.trim() ? (
-                  <div className="mt-3">
-                    <p className="text-xs text-slate-500">
-                      Gib zuerst deinen Namen ein, um ein Team zu erstellen oder beizutreten.
-                    </p>
-                  </div>
-                ) : teamLoading ? (
-                  <div className="mt-3">
-                    <p className="text-xs text-slate-400">Prüfe Team-Status…</p>
-                  </div>
-                ) : !isPlayerInTeam && playerName.trim() && !teamLoading ? (
-                  <div className="mt-3 space-y-3">
-                    {!showTeamCreateForm ? (
-                      <>
-                        <p className="text-xs text-slate-600">
-                          Der Name "{playerName.trim()}" ist noch nicht in einem Team.
-                        </p>
-                        <button
-                          onClick={() => setShowTeamCreateForm(true)}
-                          disabled={teamLoading}
-                          className="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition disabled:opacity-60 md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg"
-                        >
-                          Team erstellen
-                        </button>
-                      </>
-                    ) : (
-                      <div className="space-y-3">
-                        <p className="text-xs text-slate-600">
-                          Du bist: <span className="font-semibold">{playerName.trim()}</span>
-                        </p>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Teamname
-                          </label>
-                          <input
-                            type="text"
-                            value={teamNameInput}
-                            onChange={(e) => setTeamNameInput(e.target.value)}
-                            placeholder="z.B. Team Alpha"
-                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Name des zweiten Spielers
-                          </label>
-                          <input
-                            type="text"
-                            value={player2NameInput}
-                            onChange={(e) => setPlayer2NameInput(e.target.value)}
-                            placeholder="Name des zweiten Spielers"
-                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg"
-                          />
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              setShowTeamCreateForm(false);
-                              setTeamNameInput('');
-                              setPlayer2NameInput('');
-                              setTeamError(null);
-                            }}
-                            className="flex-1 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-white md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg"
-                          >
-                            Abbrechen
-                          </button>
-                          <button
-                            onClick={handleCreateTeam}
-                            disabled={teamLoading || !player2NameInput.trim() || !teamNameInput.trim()}
-                            className="flex-1 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition disabled:opacity-60 md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg"
-                          >
-                            {teamLoading ? 'Lädt…' : 'Erstellen'}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
                 ) : null}
               </div>
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8">
+          <section 
+            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
             <div className="flex flex-wrap items-center justify-between gap-3 md:gap-4 lg:gap-6">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900 md:text-xl lg:text-2xl">Tägliches Sudoku</h2>
-                <p className="text-sm text-slate-500 md:text-base lg:text-lg">
+                <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Tägliches Sudoku</h2>
+                <p className="text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
                   Ihr beide bekommt jeden Tag dasselbe Rätsel. Gewinne bringen 100 Punkte.
                 </p>
               </div>
               <button
                 onClick={() => loadDailyPuzzle({ navigate: true })}
                 disabled={isLoadingPuzzle || !hasDailyPuzzle}
-                className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-400 md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg"
+                className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-400 md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg"
+                style={{
+                  backgroundColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#0f172a'),
+                } as React.CSSProperties}
               >
                 <CalendarDays className="h-4 w-4 md:h-5 md:w-5" />
                 {isLoadingPuzzle ? 'Lädt…' : hasDailyPuzzle ? 'Heutiges Sudoku starten' : 'Noch nicht verfügbar'}
               </button>
             </div>
-            <div className="mt-4 grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-600 sm:grid-cols-2 md:gap-4 md:p-5 md:text-base lg:gap-5 lg:p-6 lg:text-lg">
+            <div 
+              className="mt-4 grid gap-3 rounded-2xl border p-4 text-sm sm:grid-cols-2 md:gap-4 md:p-5 md:text-base lg:gap-5 lg:p-6 lg:text-lg"
+              style={{ 
+                backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                color: playerName === 'Noe' ? '#ffffff' : '#475569'
+              } as React.CSSProperties}
+            >
               <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Datum</p>
-                <p className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">
+                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Datum</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
                   {puzzleMeta.date ?? 'Noch nicht geladen'}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Modus</p>
-                <p className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">
+                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Modus</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
                   {isDailyMode ? 'Aktives Tagesrätsel' : 'Freies Spiel'}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Schwierigkeit</p>
-                <p className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">{puzzleMeta.difficulty}</p>
+                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Schwierigkeit</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{puzzleMeta.difficulty}</p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Fortschritt</p>
-                <p className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">{formatTime(timer)}</p>
+                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Fortschritt</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(timer)}</p>
               </div>
               <div className="sm:col-span-2">
-                <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Status</p>
-                <p className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">
+                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Status</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
                   {hasDailyPuzzle ? 'Bereit zum Spielen' : 'Noch nicht veröffentlicht'}
                 </p>
               </div>
             </div>
-            <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-4 md:p-5 lg:p-6">
+            <div 
+              className="mt-4 rounded-2xl border p-4 md:p-5 lg:p-6"
+              style={{ 
+                backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                color: playerName === 'Noe' ? '#ffffff' : undefined
+              } as React.CSSProperties}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2 md:gap-3">
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Aktueller Stand</p>
-                  <p className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">{dailyStatusLabel}</p>
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktueller Stand</p>
+                  <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{dailyStatusLabel}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Aktuelle Zeit</p>
-                  <p className="text-sm font-semibold text-slate-900 md:text-base lg:text-lg">{formatTime(timer)}</p>
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktuelle Zeit</p>
+                  <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(timer)}</p>
                 </div>
               </div>
               {isDailyMode && solvedBoard.length ? (
@@ -1834,8 +1690,11 @@ const App: React.FC = () => {
                     </div>
                     <div className="mt-2 h-2 rounded-full bg-slate-200 md:h-2.5 lg:h-3">
                       <div
-                        className="h-full rounded-full bg-amber-500 transition-all"
-                        style={{ width: `${completionPercent}%` }}
+                        className="h-full rounded-full transition-all"
+                        style={{ 
+                          width: `${completionPercent}%`,
+                          backgroundColor: playerName === 'Sandy' ? '#d295bf' : '#f59e0b',
+                        } as React.CSSProperties}
                       />
                     </div>
                     <p className="mt-1 text-xs text-slate-500 md:text-sm lg:text-base">
@@ -1861,8 +1720,15 @@ const App: React.FC = () => {
             )}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8">
-            <h2 className="text-lg font-semibold text-slate-900 md:text-xl lg:text-2xl">Heutige Ergebnisse</h2>
+          <section 
+            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Heutige Ergebnisse</h2>
             <div className="mt-4 space-y-3 md:space-y-4 lg:space-y-5">
               {todayResultsLoading ? (
                 <p className="text-sm text-slate-500 md:text-base lg:text-lg">Lade Ergebnisse…</p>
@@ -1880,26 +1746,31 @@ const App: React.FC = () => {
                   return (
                     <div
                       key={name}
-                      className="flex flex-col gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:gap-3 md:px-5 md:py-4 lg:gap-4 lg:px-6 lg:py-5"
+                      className="flex flex-col gap-2 rounded-2xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:gap-3 md:px-5 md:py-4 lg:gap-4 lg:px-6 lg:py-5"
+                      style={{ 
+                        backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                        borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                        color: playerName === 'Noe' ? '#ffffff' : undefined
+                      } as React.CSSProperties}
                     >
                       <div>
-                        <p className="text-sm font-semibold text-slate-900 md:text-base lg:text-lg">{name}</p>
+                        <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{name}</p>
                         {entry ? (
-                          <p className="text-xs text-slate-500 md:text-sm lg:text-base">
+                          <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
                             Fertig in {entry.durationSeconds ? formatTime(entry.durationSeconds) : '—'} · Fehler{' '}
                             {entry.mistakes ?? 0} · {entry.points ?? 0} Punkte
                           </p>
                         ) : progress ? (
-                          <p className="text-xs text-slate-500 md:text-sm lg:text-base">
+                          <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
                             {progress.status} · {formatTime(progress.timerSeconds)} · {progress.completionPercent}% ·
                             Leben {progress.livesRemaining}
                           </p>
                         ) : (
-                          <p className="text-xs text-slate-500 md:text-sm lg:text-base">Noch kein Ergebnis eingegangen</p>
+                          <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Noch kein Ergebnis eingegangen</p>
                         )}
                       </div>
                       {entry && entry.submittedAt && (
-                        <span className="text-xs text-slate-400 md:text-sm lg:text-base">
+                        <span className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
                           {new Date(entry.submittedAt).toLocaleTimeString([], {
                             hour: '2-digit',
                             minute: '2-digit',
@@ -1919,18 +1790,25 @@ const App: React.FC = () => {
             )}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8">
-            <h2 className="text-lg font-semibold text-slate-900 md:text-xl lg:text-2xl">Leaderboard</h2>
+          <section 
+            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Leaderboard</h2>
             {teamName && (
-              <p className="mt-2 text-xs text-slate-500 md:text-sm lg:text-base">Es werden nur die Spieler aus deinem Team angezeigt.</p>
+              <p className="mt-2 text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Es werden nur die Spieler aus deinem Team angezeigt.</p>
             )}
             <div className="mt-4 md:mt-5 lg:mt-6">
               {leaderboardLoading ? (
-                <p className="text-sm text-slate-500 md:text-base lg:text-lg">Lädt Rangliste…</p>
+                <p className="text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Lädt Rangliste…</p>
               ) : leaderboardError ? (
                 <p className="text-sm text-rose-500 md:text-base lg:text-lg">{leaderboardError}</p>
               ) : leaderboard.length === 0 ? (
-                <p className="text-sm text-slate-500 md:text-base lg:text-lg">
+                <p className="text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
                   {teamName
                     ? 'Noch keine Einträge für euer Team – spielt zuerst ein tägliches Sudoku durch.'
                     : 'Noch keine Einträge – spielt zuerst ein tägliches Sudoku durch.'}
@@ -1940,19 +1818,28 @@ const App: React.FC = () => {
                   {leaderboard.map((entry, index) => (
                     <li
                       key={entry.playerName}
-                      className="flex items-center justify-between rounded-xl border border-slate-100 px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
+                      className="flex items-center justify-between rounded-xl border px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
+                      style={{ 
+                        borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                        color: playerName === 'Noe' ? '#ffffff' : undefined
+                      } as React.CSSProperties}
                     >
                       <div>
                         <div className="flex items-center gap-2 md:gap-3">
-                          <span className="text-sm font-semibold text-slate-500 md:text-base lg:text-lg">#{index + 1}</span>
-                          <span className="text-base font-semibold text-slate-900 md:text-lg lg:text-xl">{entry.playerName}</span>
+                          <span className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>#{index + 1}</span>
+                          <span className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{entry.playerName}</span>
                         </div>
-                        <p className="text-xs text-slate-500 md:text-sm lg:text-base">
+                        <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
                           {entry.wins} Siege · Ø Zeit {formatTime(Math.round(entry.averageTime))} · Ø Fehler{' '}
                           {entry.averageMistakes.toFixed(1)}
                         </p>
                       </div>
-                      <span className="text-lg font-bold text-amber-600 md:text-xl lg:text-2xl">{entry.points} P</span>
+                      <span 
+                        className="text-lg font-bold md:text-xl lg:text-2xl"
+                        style={{ color: playerName === 'Sandy' ? '#d295bf' : '#d97706' } as React.CSSProperties}
+                      >
+                        {entry.points} P
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -1960,8 +1847,15 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8">
-            <h2 className="text-lg font-semibold text-slate-900 md:text-xl lg:text-2xl">Deine Statistiken</h2>
+          <section 
+            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Deine Statistiken</h2>
             {!playerName.trim() ? (
               <p className="mt-2 text-sm text-slate-500 md:text-base lg:text-lg">Trage zuerst deinen Namen ein.</p>
             ) : !playerStats ? (
@@ -1970,25 +1864,60 @@ const App: React.FC = () => {
               </p>
             ) : (
               <div className="mt-4 grid gap-4 sm:grid-cols-2 md:gap-5 lg:gap-6">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:p-5 lg:p-6">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Siege</p>
-                  <p className="text-2xl font-semibold text-slate-900 md:text-3xl lg:text-4xl">{playerStats.wins}</p>
+                <div 
+                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
+                  style={{ 
+                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                    color: playerName === 'Noe' ? '#ffffff' : undefined
+                  } as React.CSSProperties}
+                >
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Siege</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.wins}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:p-5 lg:p-6">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Punkte</p>
-                  <p className="text-2xl font-semibold text-slate-900 md:text-3xl lg:text-4xl">{playerStats.points}</p>
+                <div 
+                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
+                  style={{ 
+                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                    color: playerName === 'Noe' ? '#ffffff' : undefined
+                  } as React.CSSProperties}
+                >
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Punkte</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.points}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:p-5 lg:p-6">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Ø Zeit</p>
-                  <p className="text-2xl font-semibold text-slate-900 md:text-3xl lg:text-4xl">{formatTime(Math.round(playerStats.averageTime))}</p>
+                <div 
+                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
+                  style={{ 
+                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                    color: playerName === 'Noe' ? '#ffffff' : undefined
+                  } as React.CSSProperties}
+                >
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Ø Zeit</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(Math.round(playerStats.averageTime))}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:p-5 lg:p-6">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Ø Fehler</p>
-                  <p className="text-2xl font-semibold text-slate-900 md:text-3xl lg:text-4xl">{playerStats.averageMistakes.toFixed(1)}</p>
+                <div 
+                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
+                  style={{ 
+                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                    color: playerName === 'Noe' ? '#ffffff' : undefined
+                  } as React.CSSProperties}
+                >
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Ø Fehler</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.averageMistakes.toFixed(1)}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 sm:col-span-2 md:p-5 lg:p-6">
-                  <p className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Gesamtspiele</p>
-                  <p className="text-2xl font-semibold text-slate-900 md:text-3xl lg:text-4xl">{playerStats.games}</p>
+                <div 
+                  className="rounded-2xl border p-4 sm:col-span-2 md:p-5 lg:p-6"
+                  style={{ 
+                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                    color: playerName === 'Noe' ? '#ffffff' : undefined
+                  } as React.CSSProperties}
+                >
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Gesamtspiele</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.games}</p>
                 </div>
               </div>
             )}
@@ -1999,23 +1928,47 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen w-full bg-slate-50 text-slate-900">
+    <div 
+      className="min-h-screen w-full"
+      style={{ 
+        backgroundColor: playerName === 'Sandy' ? '#edafb8' : (playerName === 'Noe' ? '#282828' : '#f8fafc'),
+        color: playerName === 'Noe' ? '#ffffff' : '#0f172a'
+      } as React.CSSProperties}
+    >
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col gap-4 px-4 py-6 md:max-w-6xl md:gap-6 md:px-6 md:py-8 lg:max-w-7xl lg:gap-8 lg:px-8 lg:py-10">
-        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm md:px-6 md:py-5 lg:px-8 lg:py-6">
+        <section 
+          className="rounded-2xl border px-4 py-4 shadow-sm md:px-6 md:py-5 lg:px-8 lg:py-6"
+                        style={{ 
+                          backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#ffffff'),
+                          borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+                          color: playerName === 'Noe' ? '#ffffff' : undefined
+                        } as React.CSSProperties}
+        >
           <div className="flex flex-wrap items-center justify-between gap-4 md:gap-6">
-            <h1 className="text-xl font-semibold md:text-2xl lg:text-3xl">Sudoku</h1>
-            <div className="flex items-center gap-3 text-sm text-slate-600 md:gap-4 md:text-base lg:gap-5 lg:text-lg">
+            <h1 className="text-xl font-semibold md:text-2xl lg:text-3xl" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties}>Sudoku</h1>
+            <div className="flex items-center gap-3 text-sm md:gap-4 md:text-base lg:gap-5 lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#475569' } as React.CSSProperties}>
               <span className="flex items-center gap-1">
-                <Timer className="h-4 w-4 md:h-5 md:w-5" />
+                <Timer className="h-4 w-4 md:h-5 md:w-5" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties} />
                 {formatTime(timer)}
               </span>
               <span className="flex items-center gap-1">
-                <Heart className="h-4 w-4 text-rose-500 md:h-5 md:w-5" />
+                <Heart className="h-4 w-4 md:h-5 md:w-5" style={{ color: playerName === 'Noe' ? '#ffffff' : '#ef4444' } as React.CSSProperties} />
                 {lives}
               </span>
               <button
                 onClick={() => setView('menu')}
-                className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 transition hover:bg-slate-50 md:px-4 md:py-1.5 md:text-sm lg:px-5 lg:py-2"
+                className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide transition md:px-4 md:py-1.5 md:text-sm lg:px-5 lg:py-2"
+                style={{
+                  borderColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#94a3b8'),
+                  color: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#64748b'),
+                  backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+                } as React.CSSProperties}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.setProperty('background-color', playerName === 'Sandy' ? '#f5e8f0' : (playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9'), 'important');
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.setProperty('background-color', playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'), 'important');
+                }}
               >
                 <Menu className="h-3.5 w-3.5 md:h-4 md:w-4" />
                 Menü
@@ -2024,7 +1977,12 @@ const App: React.FC = () => {
           </div>
           <div className="mt-4">
             <button
-              className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg"
+              className="flex w-full items-center justify-between rounded-xl border px-3 py-2 text-sm font-medium md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg"
+              style={{ 
+                backgroundColor: playerName === 'Noe' ? '#3f3f3f' : '#dedbd2',
+                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+                color: playerName === 'Noe' ? '#ffffff' : '#334155'
+              } as React.CSSProperties}
               onClick={() => setShowDifficultyOptions((prev) => !prev)}
             >
               <span>Modus: {selectedMode === 'Täglisches Sodoku' ? 'Täglisches Sodoku' : `Schwierigkeit: ${difficulty}`}</span>
@@ -2033,13 +1991,23 @@ const App: React.FC = () => {
               />
             </button>
             {showDifficultyOptions && (
-              <div className="mt-2 rounded-xl border border-slate-200 bg-white shadow-sm md:mt-3">
+              <div 
+                className="mt-2 rounded-xl border shadow-sm md:mt-3"
+                style={{ 
+                  backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#ffffff'),
+                  borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+                  color: playerName === 'Noe' ? '#ffffff' : undefined
+                } as React.CSSProperties}
+              >
                 {gameModes.map((mode) => (
                   <button
                     key={mode}
                     className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg ${
                       mode === selectedMode ? 'bg-slate-100 font-semibold text-slate-900' : 'text-slate-600'
                     }`}
+                    style={{
+                      color: playerName === 'Noe' ? '#ffffff' : undefined
+                    } as React.CSSProperties}
                     onClick={() => {
                       handleModeSwitch(mode);
                     }}
@@ -2053,15 +2021,23 @@ const App: React.FC = () => {
           </div>
         </section>
 
-        <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_400px] md:gap-6 lg:grid-cols-[1fr_450px] lg:gap-8">
-          <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm md:p-6 lg:p-8">
-            <div className="w-full max-w-[min(90vw,520px)] aspect-square mx-auto rounded-2xl border-2 border-slate-300 bg-slate-100 p-1 shadow-inner md:max-w-full lg:max-w-full">
-              <div className="grid h-full w-full grid-rows-9 grid-cols-9 gap-[2px] bg-slate-400/40">
+        <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_380px] md:gap-6 lg:grid-cols-[1fr_420px] lg:gap-8">
+          <section 
+            className="rounded-3xl border p-4 shadow-sm md:p-6 lg:p-8"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
+            <div className="w-full max-w-[min(95vw,700px)] aspect-square mx-auto rounded-2xl border-3 bg-slate-100 p-0 shadow-inner md:max-w-[min(95vw,800px)] lg:max-w-[min(95vw,900px)] overflow-hidden" style={{ borderColor: playerName === 'Sandy' ? '#64748b' : (playerName === 'Noe' ? '#8b8b8b' : '#475569'), borderWidth: playerName === 'Sandy' ? '6px' : '4px', borderStyle: 'solid' } as React.CSSProperties}>
+              <div className="grid h-full w-full grid-rows-9 grid-cols-9 gap-0">
                 {board.flatMap((row, r) =>
                   row.map((cell, c) => {
                       const isSelected = selected?.r === r && selected?.c === c;
                       const isRelated =
                         selected &&
+                        !isSelected &&
                         (selected.r === r ||
                           selected.c === c ||
                           (Math.floor(selected.r / 3) === Math.floor(r / 3) &&
@@ -2076,40 +2052,120 @@ const App: React.FC = () => {
                       const matchesFocus =
                         focusValue !== null && cell.value === focusValue && cell.value !== 0;
 
+                      // Für Sandy: Dickere Borders für 3x3 Blöcke (6px statt 4px)
+                      const thickBorderWidth = playerName === 'Sandy' ? '6px' : '4px';
+                      const thinBorderWidth = '1px';
+                      const thickBorderColor = playerName === 'Sandy' ? '#64748b' : (playerName === 'Noe' ? '#8b8b8b' : '#64748b');
+                      const thinBorderColor = playerName === 'Sandy' ? '#cbd5e1' : (playerName === 'Noe' ? '#8b8b8b' : '#94a3b8');
+                      
+                      // Negative Margins anpassen für Sandy's dickere Borders
+                      const thickMargin = playerName === 'Sandy' ? '-4px' : '-3px';
+                      // Äußere Ränder (r=0, r=8, c=0, c=8) und Blockgrenzen (alle 3 Zellen) bekommen dicke Borders
+                      const isThickRight = c === 8 || (c + 1) % 3 === 0;
+                      const isThickBottom = r === 8 || (r + 1) % 3 === 0;
+                      const isThickLeft = c === 0 || (c % 3 === 0 && c !== 0);
+                      const isThickTop = r === 0 || (r % 3 === 0 && r !== 0);
+
                     return (
                       <button
                         key={`${r}-${c}`}
                         onClick={() => handleCellClick(r, c)}
                         className={`flex items-center justify-center text-xl font-semibold transition md:text-2xl lg:text-3xl ${
+                          // Abgerundete Ecken für die Eck-Zellen
+                          r === 0 && c === 0 ? 'rounded-tl-xl' :
+                          r === 0 && c === 8 ? 'rounded-tr-xl' :
+                          r === 8 && c === 0 ? 'rounded-bl-xl' :
+                          r === 8 && c === 8 ? 'rounded-br-xl' : ''
+                        } ${
                           isSelected
-                            ? 'bg-slate-200 text-slate-900 shadow-inner ring-2 ring-slate-400'
+                            ? (playerName === 'Noe' ? '' : (playerName === 'Sandy' ? '' : 'bg-slate-200 text-slate-900 shadow-inner'))
                             : matchesFocus || isSameValue
-                            ? 'bg-amber-50 text-amber-900 ring-1 ring-amber-300'
+                            ? (playerName === 'Sandy' ? '' : (playerName === 'Noe' ? '' : 'bg-amber-50 text-amber-900'))
                             : isRelated
-                            ? 'bg-slate-200/70 text-slate-600'
-                            : 'bg-white text-slate-700'
-                        } ${isError ? 'bg-rose-100 text-rose-600' : ''} ${
+                            ? (playerName === 'Noe' ? '' : (playerName === 'Sandy' ? '' : 'bg-slate-200/70 text-slate-600'))
+                            : (playerName === 'Noe' ? '' : 'text-slate-700')
+                        } ${
                           feedbackState === 'correct'
-                            ? 'animate-sudoku-pop bg-emerald-100 text-emerald-900'
+                            ? (playerName === 'Noe' ? 'animate-sudoku-pop' : 'animate-sudoku-pop bg-emerald-100 text-emerald-900')
                             : ''
                         } ${
                           feedbackState === 'wrong'
-                            ? 'animate-sudoku-shake bg-rose-100 text-rose-700'
+                            ? 'animate-sudoku-shake'
                             : ''
                         } ${
-                          cell.isInitial ? 'font-bold text-slate-900' : 'font-semibold text-slate-500'
+                          cell.isInitial ? (playerName === 'Noe' ? 'font-bold' : 'font-bold text-slate-900') : (playerName === 'Noe' ? 'font-semibold' : 'font-semibold text-slate-500')
                         }`}
                         style={{
-                          borderRight:
-                            (c + 1) % 3 === 0 && c !== 8 ? '2px solid #cdd6e5' : '1px solid #e2e8f0',
-                          borderBottom:
-                            (r + 1) % 3 === 0 && r !== 8 ? '2px solid #cdd6e5' : '1px solid #e2e8f0',
-                        }}
+                          // Priorität 1: Fehlerzustände
+                          ...(isError ? {
+                            backgroundColor: '#dc2626',
+                            color: '#ffffff',
+                          } : feedbackState === 'wrong' ? {
+                            backgroundColor: '#dc2626',
+                            color: '#ffffff',
+                          } : feedbackState === 'correct' && playerName === 'Noe' ? {
+                            color: '#ffffff',
+                            backgroundColor: (!isSelected && !matchesFocus && !isSameValue && !isRelated) ? '#3f3f3f' : undefined,
+                          } : {}),
+                          // Priorität 2: Sandy's matchesFocus/isSameValue UND isSelected - Gold (wenn das Feld eine Zahl hat)
+                          ...((matchesFocus || isSameValue || (isSelected && board[r][c].value !== 0)) && playerName === 'Sandy' && !isError && !feedbackState ? {
+                            backgroundColor: '#f5e8f0',
+                            color: '#d4a55e',
+                          } : {}),
+                          // Priorität 3: Sandy's isRelated - Grau (nur wenn nicht bereits gold)
+                          ...(isRelated && playerName === 'Sandy' && !matchesFocus && !isSameValue && !(isSelected && board[r][c].value !== 0) && !isError && !feedbackState ? {
+                            backgroundColor: '#e2e8f0',
+                            color: '#475569',
+                          } : {}),
+                          // Priorität 4: Sandy's isSelected ohne Zahl - Grau
+                          ...(isSelected && playerName === 'Sandy' && board[r][c].value === 0 && !isError && !feedbackState ? {
+                            backgroundColor: '#e2e8f0',
+                            color: '#475569',
+                          } : {}),
+                          // Priorität 5: isSelected für Noe
+                          ...(isSelected && playerName === 'Noe' && !isError && !feedbackState ? {
+                            backgroundColor: '#47ad5a',
+                            color: '#ffffff',
+                          } : {}),
+                          // Priorität 6: matchesFocus/isSameValue für Noe (aber nicht wenn selected)
+                          ...((matchesFocus || isSameValue) && playerName === 'Noe' && !isSelected && !isError && !feedbackState ? {
+                            backgroundColor: '#47ad5a',
+                            color: '#ffffff',
+                          } : {}),
+                          // Priorität 7: isRelated für Noe (aber nicht wenn selected)
+                          ...(isRelated && playerName === 'Noe' && !isSelected && !isError && !feedbackState ? {
+                            backgroundColor: '#2f733b',
+                            color: '#ffffff',
+                          } : {}),
+                          // Priorität 6: Basis-Hintergrund (nur wenn keine speziellen Zustände)
+                          ...((!isSelected && !matchesFocus && !isSameValue && !isRelated && !isError && !feedbackState) ? {
+                            backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+                            color: playerName === 'Noe' ? '#ffffff' : undefined,
+                          } : {}),
+                          // Negative Margins für dicke Borders, damit sie über dünne Borders gehen
+                          // Nur anwenden, wenn die Zelle tatsächlich einen Border hat (nicht am äußeren Rand)
+                          marginRight: (c !== 8 && isThickRight) ? thickMargin : '0',
+                          marginBottom: (r !== 8 && isThickBottom) ? thickMargin : '0',
+                          marginLeft: (c !== 0 && isThickLeft) ? thickMargin : '0',
+                          marginTop: (r !== 0 && isThickTop) ? thickMargin : '0',
+                          // Position und z-index für Layering
+                          // Dünne Borders (z-index 1) im Hintergrund, dicke Borders (z-index 30) im Vordergrund
+                          position: 'relative',
+                          zIndex: (isThickRight || isThickBottom || isThickLeft || isThickTop) ? 30 : 1,
+                          // Vollständige Border-Logik: Jede Zelle bekommt ihre Borders
+                          // Äußere Ränder (r=0, r=8, c=0, c=8) bekommen KEINE Borders, da der Container bereits einen Rahmen hat
+                          // Blockgrenzen bekommen dicke Borders, Zellgrenzen bekommen dünne Borders
+                          borderRight: c === 8 ? 'none' : (isThickRight ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
+                          borderBottom: r === 8 ? 'none' : (isThickBottom ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
+                          borderLeft: c === 0 ? 'none' : (isThickLeft ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
+                          borderTop: r === 0 ? 'none' : (isThickTop ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
+                          
+                        } as React.CSSProperties}
                       >
                         {cell.value !== 0 ? (
                           cell.value
                         ) : (
-                          <div className="grid h-full w-full grid-cols-3 grid-rows-3 text-[10px] text-slate-400 md:text-xs lg:text-sm">
+                          <div className="grid h-full w-full grid-cols-3 grid-rows-3 text-[10px] md:text-xs lg:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
                             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
                               <span
                                 key={n}
@@ -2130,19 +2186,34 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5 md:sticky md:top-6 md:self-start lg:p-6">
+          <section 
+            className="rounded-2xl border p-4 shadow-sm md:p-5 md:sticky md:top-6 md:self-start lg:p-6"
+            style={{ 
+              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
           <div className="grid grid-cols-2 gap-2 text-sm text-slate-600 md:gap-3 md:text-base lg:gap-4 lg:text-lg">
             <button
-              className={`flex flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4 ${
-                isNoteMode ? 'border-slate-900 text-slate-900' : 'border-slate-200 text-slate-500'
-              }`}
+              className="flex flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
+              style={{
+                borderColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : (isNoteMode ? '#0f172a' : '#94a3b8')),
+                color: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : (isNoteMode ? '#0f172a' : '#64748b')),
+                backgroundColor: isNoteMode ? (playerName === 'Sandy' ? '#f5e8f0' : (playerName === 'Noe' ? '#3f3f3f' : '#f8fafc')) : (playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2')),
+              } as React.CSSProperties}
               onClick={() => setIsNoteMode((prev) => !prev)}
             >
               <Pencil className="h-5 w-5 md:h-6 md:w-6 lg:h-7 lg:w-7" />
               <span>Notizen {isNoteMode ? 'an' : 'aus'}</span>
             </button>
             <button
-              className="flex flex-col items-center justify-center gap-1 rounded-xl border border-slate-200 px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
+              className="flex flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
+              style={{
+                borderColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#94a3b8'),
+                color: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#64748b'),
+                backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+              } as React.CSSProperties}
               onClick={() => {
                 if (history.length === 0) return;
                 const previous = history[history.length - 1];
@@ -2150,12 +2221,19 @@ const App: React.FC = () => {
                 setBoard(previous);
               }}
             >
-              <Undo2 className="h-5 w-5 text-slate-700 md:h-6 md:w-6 lg:h-7 lg:w-7" />
+              <Undo2 className="h-5 w-5 md:h-6 md:w-6 lg:h-7 lg:w-7" />
               <span>Zurück</span>
             </button>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:p-4 md:mt-5 lg:p-5 lg:mt-6">
+          <div 
+            className="mt-4 rounded-2xl border p-3 md:p-4 md:mt-5 lg:p-5 lg:mt-6"
+            style={{ 
+              backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+              color: playerName === 'Noe' ? '#ffffff' : undefined
+            } as React.CSSProperties}
+          >
             <div className="grid grid-rows-2 gap-3 md:gap-4 lg:gap-5">
               {[ [1, 2, 3, 4, 5], [6, 7, 8, 9, 'erase'] ].map((rowNums, idx) => (
                 <div key={idx} className="grid grid-cols-5 gap-2 md:gap-3 lg:gap-4">
@@ -2165,9 +2243,10 @@ const App: React.FC = () => {
                         <button
                           key="erase"
                           onClick={handleErase}
-                          className="rounded-lg py-3 shadow-sm transition hover:bg-slate-100 bg-white flex items-center justify-center md:py-4 lg:py-5"
+                          className="rounded-lg py-3 shadow-sm transition hover:bg-slate-100 flex items-center justify-center md:py-4 lg:py-5"
+                          style={{ backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#ffffff') } as React.CSSProperties}
                         >
-                          <Eraser className="h-5 w-5 text-slate-700 md:h-6 md:w-6 lg:h-7 lg:w-7" />
+                          <Eraser className="h-5 w-5 md:h-6 md:w-6 lg:h-7 lg:w-7" style={{ color: playerName === 'Noe' ? '#53cd69' : '#334155' } as React.CSSProperties} />
                         </button>
                       );
                     }
@@ -2181,11 +2260,23 @@ const App: React.FC = () => {
                         disabled={!isAvailable}
                         className={`rounded-lg py-3 font-semibold shadow-sm transition md:py-4 lg:py-5 ${
                           !isAvailable
-                            ? 'bg-slate-100 text-slate-400 line-through cursor-not-allowed'
+                            ? 'cursor-not-allowed opacity-50'
                             : isActive
-                              ? 'bg-slate-900 text-white'
-                              : 'bg-white text-slate-700 hover:bg-slate-100'
+                              ? 'text-white'
+                              : 'text-slate-700 hover:bg-slate-100'
                         }`}
+                        style={!isAvailable ? {
+                          backgroundColor: playerName === 'Sandy' ? '#e5e7eb' : (playerName === 'Noe' ? '#2a2a2a' : '#e5e7eb'),
+                          color: playerName === 'Sandy' ? '#9ca3af' : (playerName === 'Noe' ? '#6b7280' : '#9ca3af'),
+                          textDecoration: 'line-through',
+                          border: playerName === 'Noe' ? '2px solid #1a1a1a' : '1px solid #d1d5db',
+                        } as React.CSSProperties : isActive ? {
+                          backgroundColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#0f172a'),
+                          color: playerName === 'Noe' ? '#ffffff' : undefined,
+                        } as React.CSSProperties : {
+                          backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+                          color: playerName === 'Noe' ? '#ffffff' : undefined,
+                        } as React.CSSProperties}
                       >
                         <span className={isNoteMode ? 'text-base md:text-lg lg:text-xl' : 'text-lg md:text-xl lg:text-2xl'}>{num}</span>
                       </button>
@@ -2203,10 +2294,25 @@ const App: React.FC = () => {
         </div>
 
         {gameState !== 'playing' && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-            <div className="w-full max-w-sm space-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-lg md:max-w-md md:space-y-5 md:p-8 lg:max-w-lg lg:space-y-6 lg:p-10">
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center px-4"
+            style={{
+              backgroundColor: playerName === 'Sandy' ? 'rgba(41, 39, 76, 0.5)' : 'rgba(15, 23, 42, 0.5)',
+            } as React.CSSProperties}
+          >
+            <div 
+              className="w-full max-w-sm space-y-4 rounded-2xl border p-6 text-center shadow-lg md:max-w-md md:space-y-5 md:p-8 lg:max-w-lg lg:space-y-6 lg:p-10"
+              style={{ 
+                backgroundColor: playerName === 'Noe' ? '#3f3f3f' : '#dedbd2',
+                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+                color: playerName === 'Noe' ? '#ffffff' : undefined
+              } as React.CSSProperties}
+            >
               {gameState === 'won' ? (
-                <Trophy className="mx-auto h-12 w-12 text-amber-400 md:h-16 md:w-16 lg:h-20 lg:w-20" />
+                <Trophy 
+                  className="mx-auto h-12 w-12 md:h-16 md:w-16 lg:h-20 lg:w-20" 
+                  style={{ color: playerName === 'Sandy' ? '#d295bf' : '#fbbf24' } as React.CSSProperties}
+                />
               ) : (
                 <X className="mx-auto h-12 w-12 text-rose-500 md:h-16 md:w-16 lg:h-20 lg:w-20" />
               )}
@@ -2218,7 +2324,11 @@ const App: React.FC = () => {
               </p>
               <button
                 onClick={() => startNewGame()}
-                className="w-full rounded-xl bg-slate-900 py-2 text-white md:py-2.5 md:text-base lg:py-3 lg:text-lg"
+                className="w-full rounded-xl py-2 text-white md:py-2.5 md:text-base lg:py-3 lg:text-lg"
+                style={{
+                  backgroundColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#3f3f3f' : '#0f172a'),
+                  color: playerName === 'Noe' ? '#53cd69' : undefined,
+                } as React.CSSProperties}
               >
                 Neues Spiel
               </button>
