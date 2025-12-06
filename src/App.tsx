@@ -225,28 +225,28 @@ const PLAYERS = {
 
 type PlayerName = keyof typeof PLAYERS;
 
-// Color theme helper function
-const getThemeColors = (playerName: string) => {
-  if (playerName === 'Sandy') {
-    return {
-      primary: '#d4a55e',    // Gold für Buttons/Akzente
-      dark: '#29274c',       // space-indigo für dunkle Elemente
-      accent: '#d295bf',     // lilac für Highlights
-      background: '#edafb8', // Hintergrund für Sandy
-      overlay: '#29274c',    // space-indigo für Overlays
-      textDark: '#012a36',   // jet-black für Text
-    };
-  }
-  // Default colors for Noe (slate theme)
-  return {
-    primary: '#0f172a',      // slate-900
-    dark: '#0f172a',         // slate-900
-    accent: '#f59e0b',       // amber-500
-    background: '#282828',   // dark background for Noe
-    overlay: '#0f172a',      // slate-900
-    textDark: '#0f172a',     // slate-900
-  };
-};
+// Color theme helper function (currently unused but may be needed in future)
+// const getThemeColors = (playerName: string) => {
+//   if (playerName === 'Sandy') {
+//     return {
+//       primary: '#d4a55e',    // Gold für Buttons/Akzente
+//       dark: '#29274c',       // space-indigo für dunkle Elemente
+//       accent: '#d295bf',     // lilac für Highlights
+//       background: '#edafb8', // Hintergrund für Sandy
+//       overlay: '#29274c',    // space-indigo für Overlays
+//       textDark: '#012a36',   // jet-black für Text
+//     };
+//   }
+//   // Default colors for Noe (slate theme)
+//   return {
+//     primary: '#0f172a',      // slate-900
+//     dark: '#0f172a',         // slate-900
+//     accent: '#f59e0b',       // amber-500
+//     background: '#282828',   // dark background for Noe
+//     overlay: '#0f172a',      // slate-900
+//     textDark: '#0f172a',     // slate-900
+//   };
+// };
 
 const App: React.FC = () => {
   const gameModes: GameMode[] = ['Beginner', 'Easy', 'Medium', 'Hard', 'Sandy', 'Täglisches Sodoku'];
