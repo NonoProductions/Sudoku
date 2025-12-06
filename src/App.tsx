@@ -257,6 +257,7 @@ const App: React.FC = () => {
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   const [lives, setLives] = useState(3);
   const [timer, setTimer] = useState(0);
+  const [completionTime, setCompletionTime] = useState<number | null>(null);
   const [isNoteMode, setIsNoteMode] = useState(false);
   const [gameState, setGameState] = useState<GameState>('playing');
   const [focusValue, setFocusValue] = useState<number | null>(null);
@@ -286,6 +287,8 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewMode>('game');
   const [isDailyMode, setIsDailyMode] = useState(false);
   const [hasDailyPuzzle, setHasDailyPuzzle] = useState(true);
+  const [isDailyCompleted, setIsDailyCompleted] = useState(false);
+  const [savedDailyProgress, setSavedDailyProgress] = useState<{ timerSeconds: number; completionPercent: number; status: string } | null>(null);
   const [puzzleMeta, setPuzzleMeta] = useState<{ id: string | null; date: string | null; difficulty: Difficulty }>({
     id: null,
     date: null,
@@ -310,7 +313,8 @@ const App: React.FC = () => {
   const [teamProgress, setTeamProgress] = useState<Map<string, TeamProgressEntry>>(() => new Map());
   const [teamProgressError, setTeamProgressError] = useState<string | null>(null);
   const [teamPlayerNames, setTeamPlayerNames] = useState<{ player1: string; player2: string }>({ player1: 'Noe', player2: 'Sandy' });
-  const [isPlayerInTeam, setIsPlayerInTeam] = useState(true);
+  // Fixed TypeScript error: prefix with underscore to mark as intentionally unused
+  const [_isPlayerInTeam, setIsPlayerInTeam] = useState(true);
   const attemptSubmittedRef = useRef(false);
   const boardRef = useRef<Cell[][]>([]);
   const currentPuzzleIdRef = useRef<string | null>(null);
@@ -326,8 +330,8 @@ const App: React.FC = () => {
     return teammate?.name?.trim() ?? '';
   }, [teamMembers, profileId]);
   
-  // Get theme colors based on player
-  const themeColors = useMemo(() => getThemeColors(playerName), [playerName]);
+  // Get theme colors based on player (currently unused but may be needed in future)
+  // const themeColors = useMemo(() => getThemeColors(playerName), [playerName]);
   
   // WICHTIG: expectedPlayers sollte direkt aus teamPlayerNames kommen, 
   // da das die autoritative Quelle für die beiden Spielernamen im Team ist
@@ -425,7 +429,7 @@ const App: React.FC = () => {
       // Always set playerName from login state
       setPlayerName(currentPlayerName as PlayerName);
       
-      const { data, error } = await supabase
+      const { data: _data, error } = await supabase
         .from('player_profiles')
         .select('player_name, team_name, team_player1, team_player2')
         .eq('id', profileId)
@@ -552,6 +556,7 @@ const App: React.FC = () => {
         setSolvedBoard(restoreState.solvedBoard);
         setLives(restoreState.lives);
         setTimer(restoreState.timer);
+        setCompletionTime(null);
         setGameState(restoreState.gameState);
         setSelected(restoreState.selected);
         setFocusValue(restoreState.focusValue);
@@ -581,6 +586,7 @@ const App: React.FC = () => {
         setSolvedBoard(solved);
         setLives(3);
         setTimer(0);
+        setCompletionTime(null);
         setGameState('playing');
         setSelected(null);
         setFocusValue(null);
@@ -699,7 +705,7 @@ const App: React.FC = () => {
     }
   }, [expectedPlayers, puzzleMeta.id]);
 
-  const loadDailyPuzzle = useCallback(async (options?: { navigate?: boolean }) => {
+  const loadDailyPuzzle = useCallback(async (options?: { navigate?: boolean; metadataOnly?: boolean }) => {
     setPuzzleError(null);
     setIsLoadingPuzzle(true);
     try {
@@ -731,6 +737,7 @@ const App: React.FC = () => {
 
       // Check if there's saved progress for this puzzle
       let savedProgress: { current_grid?: any; timer_seconds?: number; lives_remaining?: number; mistakes?: number } | null = null;
+      setIsDailyCompleted(false); // Reset by default
       if (playerName.trim()) {
         const { data: progressData, error: progressError } = await supabase
           .from('daily_progress')
@@ -747,7 +754,27 @@ const App: React.FC = () => {
           }
         } else if (progressData) {
           savedProgress = progressData;
+          // Check if daily is already completed
+          const isCompleted = progressData.status === 'Abgeschlossen' || progressData.completion_percent === 100;
+          setIsDailyCompleted(isCompleted);
+          // Save progress data for display in menu
+          setSavedDailyProgress({
+            timerSeconds: progressData.timer_seconds ?? 0,
+            completionPercent: progressData.completion_percent ?? 0,
+            status: progressData.status ?? 'Noch nicht gestartet',
+          });
         }
+      }
+
+      // If metadataOnly mode, update metadata and load results but don't load the board
+      if (options?.metadataOnly) {
+        setPuzzleMeta({
+          id: puzzle.id,
+          date: puzzle.puzzle_date,
+          difficulty: puzzle.difficulty ?? difficulty,
+        });
+        loadTodayResults(puzzle.id);
+        return;
       }
 
       const shouldResumeExisting =
@@ -961,11 +988,14 @@ const App: React.FC = () => {
     if (!playerName || !isDailyMode || !puzzleMeta.id || attemptSubmittedRef.current) return;
     attemptSubmittedRef.current = true;
 
+    // Use completion time if available (game was won), otherwise use current timer
+    const finalTime = completionTime !== null ? completionTime : timer;
+
     const payload = {
       player_name: playerName.trim(), // WICHTIG: trim() hinzugefügt für Konsistenz
       puzzle_id: puzzleMeta.id,
       puzzle_date: puzzleMeta.date,
-      duration_seconds: timer,
+      duration_seconds: finalTime,
       mistakes,
       points: 100,
       submitted_at: new Date().toISOString(),
@@ -981,11 +1011,14 @@ const App: React.FC = () => {
     } else {
       loadTodayResults();
     }
-  }, [playerName, isDailyMode, puzzleMeta, timer, mistakes, loadTodayResults]);
+  }, [playerName, isDailyMode, puzzleMeta, timer, completionTime, mistakes, loadTodayResults]);
 
   useEffect(() => {
     // Timer runs for both modes, but only saved for daily mode
-    if (gameState !== 'playing' || view === 'menu') return;
+    // Stop timer immediately when game is won or lost
+    if (gameState !== 'playing' || view === 'menu') {
+      return;
+    }
     const interval = window.setInterval(() => setTimer((t) => t + 1), 1000);
     return () => window.clearInterval(interval);
   }, [gameState, view]);
@@ -1008,6 +1041,22 @@ const App: React.FC = () => {
       });
     }
   }, [isDailyMode, board, solvedBoard, difficulty, lives, timer, gameState, mistakes, history, selected, focusValue, cellFeedback]);
+
+  // Load daily puzzle in background when user is authenticated
+  useEffect(() => {
+    if (isAuthenticated && playerName.trim()) {
+      // Load daily puzzle metadata in background without loading the full board
+      loadDailyPuzzle({ navigate: false, metadataOnly: true });
+
+      // Check for new daily puzzle every 5 minutes
+      const checkInterval = setInterval(() => {
+        loadDailyPuzzle({ navigate: false, metadataOnly: true });
+      }, 5 * 60 * 1000); // 5 minutes
+
+      return () => clearInterval(checkInterval);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, playerName]);
 
   // Initialize game state on mount
   useEffect(() => {
@@ -1131,6 +1180,9 @@ const App: React.FC = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  // Get the display time - use completion time if game is won, otherwise use current timer
+  const displayTime = gameState === 'won' && completionTime !== null ? completionTime : timer;
+
   const triggerFeedback = useCallback((key: string, type: 'correct' | 'wrong') => {
     setCellFeedback((prev) => ({ ...prev, [key]: type }));
     window.setTimeout(() => {
@@ -1199,7 +1251,11 @@ const App: React.FC = () => {
 
     if (isCorrect) {
       const flat = newBoard.map((row) => row.map((entry) => entry.value));
-      if (checkWin(flat, solvedBoard)) setGameState('won');
+      if (checkWin(flat, solvedBoard)) {
+        // Capture the completion time immediately
+        setCompletionTime(timer);
+        setGameState('won');
+      }
     }
   };
 
@@ -1283,15 +1339,31 @@ const App: React.FC = () => {
 
   useEffect(() => {
     completionPercentRef.current = completionPercent;
-  }, [completionPercent]);
+    // Automatically set game state to won when 100% complete
+    if (completionPercent === 100 && gameState === 'playing') {
+      setCompletionTime(timer);
+      setGameState('won');
+    }
+  }, [completionPercent, gameState, timer]);
 
   const dailyStatusLabel = useMemo(() => {
-    if (!isDailyMode || !puzzleMeta.id) return 'Noch nicht gestartet';
-    if (gameState === 'won') return 'Abgeschlossen';
-    if (gameState === 'lost') return 'Aufgegeben';
-    if (timer > 0) return 'In Bearbeitung';
-    return 'Gestartet';
-  }, [gameState, isDailyMode, puzzleMeta.id, timer]);
+    // Check if daily is completed from background check
+    if (isDailyCompleted) return 'Abgeschlossen';
+    
+    // If no puzzle metadata, not started
+    if (!puzzleMeta.id) return 'Noch nicht gestartet';
+    
+    // If in daily mode, show current game status
+    if (isDailyMode) {
+      if (gameState === 'won' || completionPercent === 100) return 'Abgeschlossen';
+      if (gameState === 'lost') return 'Aufgegeben';
+      if (timer > 0) return 'In Bearbeitung';
+      return 'Gestartet';
+    }
+    
+    // If puzzle exists but not in daily mode yet, show as available
+    return 'Noch nicht gestartet';
+  }, [gameState, isDailyMode, puzzleMeta.id, timer, completionPercent, isDailyCompleted]);
 
   useEffect(() => {
     statusRef.current = dailyStatusLabel;
@@ -1618,14 +1690,14 @@ const App: React.FC = () => {
               </div>
               <button
                 onClick={() => loadDailyPuzzle({ navigate: true })}
-                disabled={isLoadingPuzzle || !hasDailyPuzzle}
+                disabled={isLoadingPuzzle || !hasDailyPuzzle || isDailyCompleted}
                 className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-400 md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg"
                 style={{
                   backgroundColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#0f172a'),
                 } as React.CSSProperties}
               >
                 <CalendarDays className="h-4 w-4 md:h-5 md:w-5" />
-                {isLoadingPuzzle ? 'Lädt…' : hasDailyPuzzle ? 'Heutiges Sudoku starten' : 'Noch nicht verfügbar'}
+                {isLoadingPuzzle ? 'Lädt…' : isDailyCompleted ? 'Bereits abgeschlossen' : hasDailyPuzzle ? 'Heutiges Sudoku starten' : 'Noch nicht verfügbar'}
               </button>
             </div>
             <div 
@@ -1654,7 +1726,9 @@ const App: React.FC = () => {
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Fortschritt</p>
-                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(timer)}</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                  {isDailyMode ? formatTime(displayTime) : savedDailyProgress ? `${savedDailyProgress.completionPercent}%` : '0%'}
+                </p>
               </div>
               <div className="sm:col-span-2">
                 <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Status</p>
@@ -1674,11 +1748,16 @@ const App: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-2 md:gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktueller Stand</p>
-                  <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{dailyStatusLabel}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{dailyStatusLabel}</p>
+                    {(gameState === 'won' || completionPercent === 100) && isDailyMode && (
+                      <Trophy className="h-5 w-5 md:h-6 md:w-6" style={{ color: playerName === 'Sandy' ? '#d295bf' : '#fbbf24' } as React.CSSProperties} />
+                    )}
+                  </div>
                 </div>
                 <div className="text-right">
                   <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktuelle Zeit</p>
-                  <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(timer)}</p>
+                  <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(displayTime)}</p>
                 </div>
               </div>
               {isDailyMode && solvedBoard.length ? (
@@ -1949,7 +2028,7 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3 text-sm md:gap-4 md:text-base lg:gap-5 lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#475569' } as React.CSSProperties}>
               <span className="flex items-center gap-1">
                 <Timer className="h-4 w-4 md:h-5 md:w-5" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties} />
-                {formatTime(timer)}
+                {formatTime(displayTime)}
               </span>
               <span className="flex items-center gap-1">
                 <Heart className="h-4 w-4 md:h-5 md:w-5" style={{ color: playerName === 'Noe' ? '#ffffff' : '#ef4444' } as React.CSSProperties} />
@@ -2030,7 +2109,7 @@ const App: React.FC = () => {
               color: playerName === 'Noe' ? '#ffffff' : undefined
             } as React.CSSProperties}
           >
-            <div className="w-full max-w-[min(95vw,700px)] aspect-square mx-auto rounded-2xl border-3 bg-slate-100 p-0 shadow-inner md:max-w-[min(95vw,800px)] lg:max-w-[min(95vw,900px)] overflow-hidden" style={{ borderColor: playerName === 'Sandy' ? '#64748b' : (playerName === 'Noe' ? '#8b8b8b' : '#475569'), borderWidth: playerName === 'Sandy' ? '6px' : '4px', borderStyle: 'solid' } as React.CSSProperties}>
+            <div className="w-full max-w-[min(95vw,700px)] aspect-square mx-auto rounded-2xl border-3 bg-slate-100 p-0 shadow-inner md:max-w-[min(95vw,800px)] lg:max-w-[min(95vw,900px)] overflow-hidden" style={{ borderColor: playerName === 'Noe' ? '#8b8b8b' : '#475569', borderWidth: '4px', borderStyle: 'solid' } as React.CSSProperties}>
               <div className="grid h-full w-full grid-rows-9 grid-cols-9 gap-0">
                 {board.flatMap((row, r) =>
                   row.map((cell, c) => {
@@ -2051,20 +2130,6 @@ const App: React.FC = () => {
                       const feedbackState = cellFeedback[feedbackKey];
                       const matchesFocus =
                         focusValue !== null && cell.value === focusValue && cell.value !== 0;
-
-                      // Für Sandy: Dickere Borders für 3x3 Blöcke (6px statt 4px)
-                      const thickBorderWidth = playerName === 'Sandy' ? '6px' : '4px';
-                      const thinBorderWidth = '1px';
-                      const thickBorderColor = playerName === 'Sandy' ? '#64748b' : (playerName === 'Noe' ? '#8b8b8b' : '#64748b');
-                      const thinBorderColor = playerName === 'Sandy' ? '#cbd5e1' : (playerName === 'Noe' ? '#8b8b8b' : '#94a3b8');
-                      
-                      // Negative Margins anpassen für Sandy's dickere Borders
-                      const thickMargin = playerName === 'Sandy' ? '-4px' : '-3px';
-                      // Äußere Ränder (r=0, r=8, c=0, c=8) und Blockgrenzen (alle 3 Zellen) bekommen dicke Borders
-                      const isThickRight = c === 8 || (c + 1) % 3 === 0;
-                      const isThickBottom = r === 8 || (r + 1) % 3 === 0;
-                      const isThickLeft = c === 0 || (c % 3 === 0 && c !== 0);
-                      const isThickTop = r === 0 || (r % 3 === 0 && r !== 0);
 
                     return (
                       <button
@@ -2143,22 +2208,22 @@ const App: React.FC = () => {
                             color: playerName === 'Noe' ? '#ffffff' : undefined,
                           } : {}),
                           // Negative Margins für dicke Borders, damit sie über dünne Borders gehen
-                          // Nur anwenden, wenn die Zelle tatsächlich einen Border hat (nicht am äußeren Rand)
-                          marginRight: (c !== 8 && isThickRight) ? thickMargin : '0',
-                          marginBottom: (r !== 8 && isThickBottom) ? thickMargin : '0',
-                          marginLeft: (c !== 0 && isThickLeft) ? thickMargin : '0',
-                          marginTop: (r !== 0 && isThickTop) ? thickMargin : '0',
-                          // Position und z-index für Layering
-                          // Dünne Borders (z-index 1) im Hintergrund, dicke Borders (z-index 30) im Vordergrund
+                          marginRight: ((c + 1) % 3 === 0 || c === 8) ? '-3px' : '0',
+                          marginBottom: ((r + 1) % 3 === 0 || r === 8) ? '-3px' : '0',
+                          marginLeft: (c === 0 || (c % 3 === 0 && c !== 0)) ? '-3px' : '0',
+                          marginTop: (r === 0 || (r % 3 === 0 && r !== 0)) ? '-3px' : '0',
+                          // Position und z-index für Layering (muss vor Borders kommen)
+                          // Zellen mit dicken Borders bekommen höheren z-index, damit sie über dünne Borders liegen
                           position: 'relative',
-                          zIndex: (isThickRight || isThickBottom || isThickLeft || isThickTop) ? 30 : 1,
-                          // Vollständige Border-Logik: Jede Zelle bekommt ihre Borders
-                          // Äußere Ränder (r=0, r=8, c=0, c=8) bekommen KEINE Borders, da der Container bereits einen Rahmen hat
-                          // Blockgrenzen bekommen dicke Borders, Zellgrenzen bekommen dünne Borders
-                          borderRight: c === 8 ? 'none' : (isThickRight ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
-                          borderBottom: r === 8 ? 'none' : (isThickBottom ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
-                          borderLeft: c === 0 ? 'none' : (isThickLeft ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
-                          borderTop: r === 0 ? 'none' : (isThickTop ? `${thickBorderWidth} solid ${thickBorderColor}` : `${thinBorderWidth} solid ${thinBorderColor}`),
+                          zIndex: ((c + 1) % 3 === 0 || c === 8 || c === 0 || (c % 3 === 0 && c !== 0)) || 
+                                  ((r + 1) % 3 === 0 || r === 8 || r === 0 || (r % 3 === 0 && r !== 0)) ? 20 : 5,
+                          // Vollständige Border-Logik: Jede Zelle bekommt ALLE ihre Borders
+                          // Diese Borders müssen IMMER zuletzt gesetzt werden, damit sie nicht überschrieben werden
+                          // Dicke Rahmen (4px) für Blockgrenzen und äußere Ränder, dünne Rahmen (1px) für Zellgrenzen
+                          borderRight: ((c + 1) % 3 === 0 || c === 8) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                          borderBottom: ((r + 1) % 3 === 0 || r === 8) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                          borderLeft: (c === 0 || (c % 3 === 0 && c !== 0)) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                          borderTop: (r === 0 || (r % 3 === 0 && r !== 0)) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
                           
                         } as React.CSSProperties}
                       >
@@ -2320,7 +2385,7 @@ const App: React.FC = () => {
                 {gameState === 'won' ? 'Gut gemacht!' : 'Spiel vorbei'}
               </h2>
               <p className="text-sm text-slate-500 md:text-base lg:text-lg">
-                {gameState === 'won' ? `Zeit: ${formatTime(timer)}` : 'Versuch es noch einmal.'}
+                {gameState === 'won' ? `Zeit: ${formatTime(displayTime)}` : 'Versuch es noch einmal.'}
               </p>
               <button
                 onClick={() => startNewGame()}
