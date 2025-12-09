@@ -75,7 +75,7 @@ $$;
 -- Cron Job - jetzt super einfach!
 SELECT cron.schedule(
   'TäglichesSudoku',
-  '0 0 * * *',
+  '0 22,23 * * *',
   $$SELECT trigger_daily_puzzle();$$
 );
 
@@ -87,7 +87,7 @@ SELECT cron.schedule(
 /*
 SELECT cron.schedule(
   'TäglichesSudoku',
-  '0 0 * * *',
+  '0 22,23 * * *',
   $$
   SELECT
     net.http_post(
@@ -102,5 +102,6 @@ SELECT cron.schedule(
   $$
 );
 */
+
 
 

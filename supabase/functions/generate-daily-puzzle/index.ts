@@ -157,13 +157,9 @@ const generateSudoku = (difficulty: Difficulty): { initial: Board; solved: Board
   return { initial, solved };
 };
 
-// Get today's date in YYYY-MM-DD format
+// Get today's date in YYYY-MM-DD format (Europe/Berlin timezone)
 const getTodayDateString = (): string => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' });
 };
 
 serve(async (req) => {

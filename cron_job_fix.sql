@@ -36,7 +36,7 @@ SELECT cron.unschedule('TäglichesSudoku');
 -- Die Edge Function URL ist "generate-daily-puzzle"
 SELECT cron.schedule(
   'TäglichesSudoku',  -- Cron Job Name
-  '0 0 * * *',  -- Jeden Tag um 00:00 UTC (Mitternacht)
+  '0 22,23 * * *',  -- Täglich um 22:00 und 23:00 UTC (für DE Winter/Sommerzeit Abdeckung)
   $$
   SELECT
     net.http_post(

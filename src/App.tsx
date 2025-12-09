@@ -151,11 +151,8 @@ type AttemptSummary = {
 };
 
 const getLocalDateString = () => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // Use Europe/Berlin timezone for consistency with server
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' });
 };
 
 type FreePlayState = {
@@ -567,11 +564,12 @@ const App: React.FC = () => {
         if (restoreState.difficulty) {
           setDifficulty(restoreState.difficulty);
         }
-        setPuzzleMeta({
-          id: null,
-          date: null,
-          difficulty: restoreState.difficulty,
-        });
+        // Don't update puzzleMeta for free play - keep daily puzzle metadata
+        // setPuzzleMeta({
+        //   id: null,
+        //   date: null,
+        //   difficulty: restoreState.difficulty,
+        // });
       } else {
         // New game state
         const newBoard = initial.map((row) =>
@@ -597,11 +595,15 @@ const App: React.FC = () => {
         if (meta?.difficulty) {
           setDifficulty(meta.difficulty);
         }
-        setPuzzleMeta({
-          id: meta?.id ?? null,
-          date: meta?.date ?? null,
-          difficulty: meta?.difficulty ?? difficulty,
-        });
+        // Only update puzzleMeta for daily puzzles, not for free play
+        if (meta?.mode === 'daily') {
+          setPuzzleMeta({
+            id: meta?.id ?? null,
+            date: meta?.date ?? null,
+            difficulty: meta?.difficulty ?? difficulty,
+          });
+        }
+        // For free play, don't update puzzleMeta - keep daily puzzle metadata
       }
       attemptSubmittedRef.current = false;
     },
@@ -621,7 +623,16 @@ const App: React.FC = () => {
   const loadTodayResults = useCallback(
     async (customPuzzleId?: string) => {
       const targetPuzzleId = customPuzzleId ?? puzzleMeta.id;
-      if (!targetPuzzleId) return;
+      const today = getLocalDateString();
+      
+      // Only load results if puzzle date is today
+      if (!targetPuzzleId || puzzleMeta.date !== today) {
+        setTodayResults([]);
+        setTodayResultsError(null);
+        setTodayResultsLoading(false);
+        return;
+      }
+      
       setTodayResultsError(null);
       setTodayResultsLoading(true);
       try {
@@ -646,12 +657,15 @@ const App: React.FC = () => {
         setTodayResultsLoading(false);
       }
     },
-    [puzzleMeta.id],
+    [puzzleMeta.id, puzzleMeta.date],
   );
 
   const loadTeamProgress = useCallback(async () => {
     const targetPuzzleId = puzzleMeta.id;
-    if (!targetPuzzleId || expectedPlayers.length === 0) {
+    const today = getLocalDateString();
+    
+    // Only load progress if puzzle date is today
+    if (!targetPuzzleId || puzzleMeta.date !== today || expectedPlayers.length === 0) {
       setTeamProgress(new Map());
       return;
     }
@@ -738,6 +752,15 @@ const App: React.FC = () => {
       // Check if there's saved progress for this puzzle
       let savedProgress: { current_grid?: any; timer_seconds?: number; lives_remaining?: number; mistakes?: number } | null = null;
       setIsDailyCompleted(false); // Reset by default
+      
+      // Check if puzzle date has changed - if so, clear old progress
+      const previousPuzzleDate = puzzleMeta.date;
+      const currentPuzzleDate = puzzle.puzzle_date;
+      if (previousPuzzleDate && previousPuzzleDate !== currentPuzzleDate) {
+        // Puzzle date has changed, clear old progress
+        setSavedDailyProgress(null);
+      }
+      
       if (playerName.trim()) {
         const { data: progressData, error: progressError } = await supabase
           .from('daily_progress')
@@ -752,28 +775,53 @@ const App: React.FC = () => {
           if (progressError.message?.includes('column') || progressError.message?.includes('does not exist') || progressError.message?.includes('current_grid')) {
             console.error('FEHLER: Die Spalte "current_grid" existiert nicht in der daily_progress Tabelle. Bitte füge sie in Supabase hinzu (siehe SUPABASE_SETUP.md)');
           }
+          // Clear saved progress on error
+          setSavedDailyProgress(null);
         } else if (progressData) {
           savedProgress = progressData;
           // Check if daily is already completed
           const isCompleted = progressData.status === 'Abgeschlossen' || progressData.completion_percent === 100;
           setIsDailyCompleted(isCompleted);
-          // Save progress data for display in menu
-          setSavedDailyProgress({
-            timerSeconds: progressData.timer_seconds ?? 0,
-            completionPercent: progressData.completion_percent ?? 0,
-            status: progressData.status ?? 'Noch nicht gestartet',
-          });
+          // Only save progress data if puzzle date is today
+          if (puzzle.puzzle_date === today) {
+            setSavedDailyProgress({
+              timerSeconds: progressData.timer_seconds ?? 0,
+              completionPercent: progressData.completion_percent ?? 0,
+              status: progressData.status ?? 'Noch nicht gestartet',
+            });
+          } else {
+            // Puzzle date is not today - clear saved progress
+            setSavedDailyProgress(null);
+          }
+        } else {
+          // No progress found for this puzzle - clear saved progress
+          setSavedDailyProgress(null);
         }
+      } else {
+        // No player name - clear saved progress
+        setSavedDailyProgress(null);
       }
 
       // If metadataOnly mode, update metadata and load results but don't load the board
       if (options?.metadataOnly) {
-        setPuzzleMeta({
-          id: puzzle.id,
-          date: puzzle.puzzle_date,
-          difficulty: puzzle.difficulty ?? difficulty,
-        });
-        loadTodayResults(puzzle.id);
+        // Only update puzzleMeta if puzzle date is today
+        if (puzzle.puzzle_date === today) {
+          setPuzzleMeta({
+            id: puzzle.id,
+            date: puzzle.puzzle_date,
+            difficulty: puzzle.difficulty ?? difficulty,
+          });
+          loadTodayResults(puzzle.id);
+        } else {
+          // Puzzle date is not today - clear puzzleMeta and savedDailyProgress
+          setPuzzleMeta({
+            id: null,
+            date: null,
+            difficulty: difficulty,
+          });
+          setSavedDailyProgress(null);
+          setTodayResults([]); // Clear today's results
+        }
         return;
       }
 
@@ -809,23 +857,49 @@ const App: React.FC = () => {
         setMistakes(0);
         setIsDailyMode(true);
         setDifficulty(puzzle.difficulty ?? difficulty);
-        setPuzzleMeta({
-          id: puzzle.id,
-          date: puzzle.puzzle_date,
-          difficulty: puzzle.difficulty ?? difficulty,
-        });
-        attemptSubmittedRef.current = false;
-        loadTodayResults(puzzle.id);
+        // Only set puzzleMeta if puzzle date is today
+        if (puzzle.puzzle_date === today) {
+          setPuzzleMeta({
+            id: puzzle.id,
+            date: puzzle.puzzle_date,
+            difficulty: puzzle.difficulty ?? difficulty,
+          });
+          attemptSubmittedRef.current = false;
+          loadTodayResults(puzzle.id);
+        } else {
+          // Puzzle date is not today - clear puzzleMeta
+          setPuzzleMeta({
+            id: null,
+            date: null,
+            difficulty: difficulty,
+          });
+          setSavedDailyProgress(null);
+          setTodayResults([]); // Clear today's results
+          setTeamProgress(new Map()); // Clear team progress
+        }
       } else {
         // Start fresh
         setSelectedMode('Täglisches Sodoku');
-        applyPuzzleToState(puzzle.initial_grid, puzzle.solution_grid, {
-          id: puzzle.id,
-          mode: 'daily',
-          date: puzzle.puzzle_date,
-          difficulty: puzzle.difficulty ?? difficulty,
-        });
-        loadTodayResults(puzzle.id);
+        // Only set puzzleMeta and load if puzzle date is today
+        if (puzzle.puzzle_date === today) {
+          applyPuzzleToState(puzzle.initial_grid, puzzle.solution_grid, {
+            id: puzzle.id,
+            mode: 'daily',
+            date: puzzle.puzzle_date,
+            difficulty: puzzle.difficulty ?? difficulty,
+          });
+          loadTodayResults(puzzle.id);
+        } else {
+          // Puzzle date is not today - clear puzzleMeta
+          setPuzzleMeta({
+            id: null,
+            date: null,
+            difficulty: difficulty,
+          });
+          setSavedDailyProgress(null);
+          setTodayResults([]); // Clear today's results
+          setTeamProgress(new Map()); // Clear team progress
+        }
       }
     } catch (err) {
       console.error(err);
@@ -1084,11 +1158,17 @@ const App: React.FC = () => {
   useEffect(() => {
     if (view === 'menu') {
       loadLeaderboard();
+      // Refresh daily puzzle data when menu is opened to ensure we have the latest data
+      if (isAuthenticated && playerName.trim()) {
+        loadDailyPuzzle({ navigate: false, metadataOnly: true });
+      }
     }
-  }, [view, loadLeaderboard]);
+  }, [view, loadLeaderboard, isAuthenticated, playerName, loadDailyPuzzle]);
 
   useEffect(() => {
-    if (view === 'menu' && puzzleMeta.id) {
+    const today = getLocalDateString();
+    // Only load results if puzzle date is today
+    if (view === 'menu' && puzzleMeta.id && puzzleMeta.date === today) {
       loadTodayResults();
       
       // Realtime subscription für automatische Updates der heutigen Ergebnisse
@@ -1116,11 +1196,21 @@ const App: React.FC = () => {
       return () => {
         supabase.removeChannel(channel);
       };
+    } else if (view === 'menu') {
+      const todayCheck = getLocalDateString();
+      // Clear results and progress if puzzle date is not today
+      if (puzzleMeta.date !== todayCheck) {
+        setTodayResults([]);
+        setTeamProgress(new Map());
+      }
     }
-  }, [view, puzzleMeta.id, loadTodayResults]);
+  }, [view, puzzleMeta.id, puzzleMeta.date, loadTodayResults]);
 
   useEffect(() => {
-    if (!puzzleMeta.id || expectedPlayers.length === 0) {
+    const today = getLocalDateString();
+    
+    // Only load team progress if puzzle date is today
+    if (!puzzleMeta.id || puzzleMeta.date !== today || expectedPlayers.length === 0) {
       setTeamProgress(new Map());
       return;
     }
@@ -1165,7 +1255,7 @@ const App: React.FC = () => {
       window.clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, [puzzleMeta.id, expectedPlayers, loadTeamProgress]);
+  }, [puzzleMeta.id, puzzleMeta.date, expectedPlayers, loadTeamProgress]);
 
   useEffect(() => {
     if (gameState === 'won') {
@@ -1347,11 +1437,17 @@ const App: React.FC = () => {
   }, [completionPercent, gameState, timer]);
 
   const dailyStatusLabel = useMemo(() => {
+    // Check if puzzle date is today - if not, always show "Noch nicht gestartet"
+    const isTodayPuzzle = puzzleMeta.date === getLocalDateString();
+    
     // Check if daily is completed from background check
-    if (isDailyCompleted) return 'Abgeschlossen';
+    if (isDailyCompleted && isTodayPuzzle) return 'Abgeschlossen';
     
     // If no puzzle metadata, not started
     if (!puzzleMeta.id) return 'Noch nicht gestartet';
+    
+    // If puzzle date is not today, show as not started
+    if (!isTodayPuzzle) return 'Noch nicht gestartet';
     
     // If in daily mode, show current game status
     if (isDailyMode) {
@@ -1363,7 +1459,7 @@ const App: React.FC = () => {
     
     // If puzzle exists but not in daily mode yet, show as available
     return 'Noch nicht gestartet';
-  }, [gameState, isDailyMode, puzzleMeta.id, timer, completionPercent, isDailyCompleted]);
+  }, [gameState, isDailyMode, puzzleMeta.id, puzzleMeta.date, timer, completionPercent, isDailyCompleted]);
 
   useEffect(() => {
     statusRef.current = dailyStatusLabel;
@@ -1711,25 +1807,23 @@ const App: React.FC = () => {
               <div>
                 <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Datum</p>
                 <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
-                  {puzzleMeta.date ?? 'Noch nicht geladen'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Modus</p>
-                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
-                  {isDailyMode ? 'Aktives Tagesrätsel' : 'Freies Spiel'}
+                  {puzzleMeta.id && puzzleMeta.date === getLocalDateString() ? puzzleMeta.date : 'Noch nicht geladen'}
                 </p>
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Schwierigkeit</p>
-                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{puzzleMeta.difficulty}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Fortschritt</p>
                 <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
-                  {isDailyMode ? formatTime(displayTime) : savedDailyProgress ? `${savedDailyProgress.completionPercent}%` : '0%'}
+                  {puzzleMeta.id && puzzleMeta.date === getLocalDateString() ? puzzleMeta.difficulty : '—'}
                 </p>
               </div>
+              {dailyStatusLabel !== 'Noch nicht gestartet' && (
+                <div>
+                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Fortschritt</p>
+                  <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                    {puzzleMeta.date === getLocalDateString() && savedDailyProgress && savedDailyProgress.completionPercent > 0 ? `${savedDailyProgress.completionPercent}%` : (isDailyMode ? formatTime(displayTime) : '0%')}
+                  </p>
+                </div>
+              )}
               <div className="sm:col-span-2">
                 <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Status</p>
                 <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
@@ -1757,7 +1851,9 @@ const App: React.FC = () => {
                 </div>
                 <div className="text-right">
                   <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktuelle Zeit</p>
-                  <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(displayTime)}</p>
+                  <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                    {dailyStatusLabel === 'Noch nicht gestartet' ? '—' : (isDailyMode ? formatTime(displayTime) : (puzzleMeta.date === getLocalDateString() && savedDailyProgress && savedDailyProgress.timerSeconds > 0) ? formatTime(savedDailyProgress.timerSeconds) : '—')}
+                  </p>
                 </div>
               </div>
               {isDailyMode && solvedBoard.length ? (
@@ -1808,59 +1904,98 @@ const App: React.FC = () => {
             } as React.CSSProperties}
           >
             <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Heutige Ergebnisse</h2>
-            <div className="mt-4 space-y-3 md:space-y-4 lg:space-y-5">
-              {todayResultsLoading ? (
-                <p className="text-sm text-slate-500 md:text-base lg:text-lg">Lade Ergebnisse…</p>
-              ) : todayResultsError ? (
-                <p className="text-sm text-rose-500 md:text-base lg:text-lg">{todayResultsError}</p>
-              ) : expectedPlayers.length === 0 ? (
-                <p className="text-sm text-slate-500 md:text-base lg:text-lg">
-                  Trage deinen Namen ein und erstelle ein Team, um eure Ergebnisse zu vergleichen.
-                </p>
-              ) : (
-                expectedPlayers.map((name) => {
-                  const normalized = name.trim().toLowerCase();
-                  const entry = todaysResultMap.get(normalized);
-                  const progress = teamProgress.get(normalized);
-                  return (
-                    <div
-                      key={name}
-                      className="flex flex-col gap-2 rounded-2xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:gap-3 md:px-5 md:py-4 lg:gap-4 lg:px-6 lg:py-5"
-                      style={{ 
-                        backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                        borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                        color: playerName === 'Noe' ? '#ffffff' : undefined
-                      } as React.CSSProperties}
-                    >
-                      <div>
-                        <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{name}</p>
-                        {entry ? (
-                          <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
-                            Fertig in {entry.durationSeconds ? formatTime(entry.durationSeconds) : '—'} · Fehler{' '}
-                            {entry.mistakes ?? 0} · {entry.points ?? 0} Punkte
-                          </p>
-                        ) : progress ? (
-                          <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
-                            {progress.status} · {formatTime(progress.timerSeconds)} · {progress.completionPercent}% ·
-                            Leben {progress.livesRemaining}
-                          </p>
-                        ) : (
-                          <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Noch kein Ergebnis eingegangen</p>
-                        )}
-                      </div>
-                      {entry && entry.submittedAt && (
-                        <span className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
-                          {new Date(entry.submittedAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
+            {(() => {
+              const today = getLocalDateString();
+              
+              // STRICT CHECK: Only show if puzzle date is exactly today
+              if (puzzleMeta.date !== today || !puzzleMeta.id) {
+                return null;
+              }
+              
+              if (expectedPlayers.length === 0) {
+                return (
+                  <p className="mt-4 text-sm text-slate-500 md:text-base lg:text-lg">
+                    Trage deinen Namen ein und erstelle ein Team, um eure Ergebnisse zu vergleichen.
+                  </p>
+                );
+              }
+              
+              // Only use teamProgress if puzzle date is today - create filtered map
+              const filteredTeamProgress = new Map<string, TeamProgressEntry>();
+              if (puzzleMeta.date === today) {
+                teamProgress.forEach((value, key) => {
+                  filteredTeamProgress.set(key, value);
+                });
+              }
+              
+              // Check if there are any results or progress
+              const hasAnyResults = expectedPlayers.some(name => {
+                const normalized = name.trim().toLowerCase();
+                return todaysResultMap.get(normalized) || filteredTeamProgress.get(normalized);
+              });
+              
+              if (!hasAnyResults && !todayResultsLoading && !todayResultsError) {
+                return null; // Don't show anything if no one has started
+              }
+              
+              return (
+                <div className="mt-4 space-y-3 md:space-y-4 lg:space-y-5">
+                  {todayResultsLoading ? (
+                    <p className="text-sm text-slate-500 md:text-base lg:text-lg">Lade Ergebnisse…</p>
+                  ) : todayResultsError ? (
+                    <p className="text-sm text-rose-500 md:text-base lg:text-lg">{todayResultsError}</p>
+                  ) : (
+                    expectedPlayers
+                      .map((name) => {
+                        const normalized = name.trim().toLowerCase();
+                        const entry = todaysResultMap.get(normalized);
+                        const progress = filteredTeamProgress.get(normalized);
+                        
+                        // Only show if there's an entry or progress
+                        if (!entry && !progress) {
+                          return null;
+                        }
+                        
+                        return (
+                          <div
+                            key={name}
+                            className="flex flex-col gap-2 rounded-2xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:gap-3 md:px-5 md:py-4 lg:gap-4 lg:px-6 lg:py-5"
+                            style={{ 
+                              backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
+                              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
+                              color: playerName === 'Noe' ? '#ffffff' : undefined
+                            } as React.CSSProperties}
+                          >
+                            <div>
+                              <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{name}</p>
+                              {entry ? (
+                                <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                                  Fertig in {entry.durationSeconds ? formatTime(entry.durationSeconds) : '—'} · Fehler{' '}
+                                  {entry.mistakes ?? 0} · {entry.points ?? 0} Punkte
+                                </p>
+                              ) : progress ? (
+                                <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                                  {progress.status} · {formatTime(progress.timerSeconds)} · {progress.completionPercent}% ·
+                                  Leben {progress.livesRemaining}
+                                </p>
+                              ) : null}
+                            </div>
+                            {entry && entry.submittedAt && (
+                              <span className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
+                                {new Date(entry.submittedAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                      .filter(Boolean) // Remove null entries
+                  )}
+                </div>
+              );
+            })()}
               {teamProgressError && (
                 <p className="mt-3 text-xs text-rose-500 md:text-sm lg:text-base">{teamProgressError}</p>
               )}

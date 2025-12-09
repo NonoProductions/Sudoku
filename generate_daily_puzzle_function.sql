@@ -23,8 +23,8 @@ DECLARE
   difficulty_text text := 'Medium';
   clues_to_remove integer := 40; -- Für Medium difficulty
 BEGIN
-  -- Hole heutiges Datum
-  today_date := CURRENT_DATE;
+  -- Hole heutiges Datum (in Berlin Zeitzone)
+  today_date := (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Berlin')::date;
   
   -- Prüfe, ob bereits ein Puzzle für heute existiert
   SELECT id INTO existing_id
@@ -103,7 +103,7 @@ SELECT cron.unschedule('TäglichesSudoku');
 -- Erstelle neuen Cron Job - jetzt viel einfacher!
 SELECT cron.schedule(
   'TäglichesSudoku',
-  '0 0 * * *',  -- Jeden Tag um 00:00 UTC
+  '0 22,23 * * *',  -- Täglich um 22:00 und 23:00 UTC (für DE Winter/Sommerzeit)
   $$SELECT generate_daily_puzzle();$$
 );
 
@@ -120,5 +120,6 @@ SELECT * FROM generate_daily_puzzle();
 
 -- Prüfe, ob ein Puzzle für heute erstellt wurde
 SELECT * FROM daily_puzzles WHERE puzzle_date = CURRENT_DATE;
+
 
 

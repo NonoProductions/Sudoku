@@ -53,7 +53,7 @@ SELECT cron.unschedule('TäglichesSudoku');
 -- Schritt 4: Erstelle den Cron Job - jetzt super einfach!
 SELECT cron.schedule(
   'TäglichesSudoku',
-  '0 0 * * *',  -- Jeden Tag um 00:00 UTC
+  '0 22,23 * * *',  -- 22:00 und 23:00 UTC (deckt DE Winter- & Sommerzeit ab)
   $$SELECT generate_daily_puzzle_via_edge_function();$$
 );
 
@@ -128,5 +128,6 @@ FROM cron.job_run_details
 WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'TäglichesSudoku')
 ORDER BY start_time DESC
 LIMIT 5;
+
 
 

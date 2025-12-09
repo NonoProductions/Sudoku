@@ -56,3 +56,4 @@ SELECT cron.run('TäglichesSudoku');  -- Richtig! Das ist der Cron Job Name
 ```
 
 
+
