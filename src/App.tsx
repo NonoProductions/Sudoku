@@ -2248,14 +2248,24 @@ const App: React.FC = () => {
                   {puzzleMeta.id && puzzleMeta.date === getLocalDateString() ? puzzleMeta.difficulty : '—'}
                 </p>
               </div>
-              {dailyStatusLabel !== 'Noch nicht gestartet' && (
-                <div>
-                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Fortschritt</p>
-                  <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
-                    {puzzleMeta.date === getLocalDateString() && savedDailyProgress && savedDailyProgress.completionPercent > 0 ? `${savedDailyProgress.completionPercent}%` : (isDailyMode ? formatTime(displayTime) : '0%')}
-                  </p>
-                </div>
-              )}
+              {dailyStatusLabel !== 'Noch nicht gestartet' && (() => {
+                const isToday = puzzleMeta.date === getLocalDateString();
+                let progress: number | null = null;
+                if (isToday && savedDailyProgress !== null) {
+                  const progressData = savedDailyProgress!;
+                  if (progressData.completionPercent > 0) {
+                    progress = progressData.completionPercent;
+                  }
+                }
+                return (
+                  <div>
+                    <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Fortschritt</p>
+                    <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
+                      {progress !== null ? `${progress}%` : (isDailyMode ? formatTime(displayTime) : '0%')}
+                    </p>
+                  </div>
+                );
+              })()}
               <div className="sm:col-span-2">
                 <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Status</p>
                 <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
@@ -2277,7 +2287,17 @@ const App: React.FC = () => {
                 <div className="text-right">
                   <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Aktuelle Zeit</p>
                   <p className="text-sm font-semibold md:text-base lg:text-lg text-slate-900">
-                    {dailyStatusLabel === 'Noch nicht gestartet' ? '—' : (isDailyMode ? formatTime(displayTime) : (puzzleMeta.date === getLocalDateString() && savedDailyProgress && savedDailyProgress.timerSeconds > 0) ? formatTime(savedDailyProgress.timerSeconds) : '—')}
+                    {dailyStatusLabel === 'Noch nicht gestartet' ? '—' : isDailyMode ? formatTime(displayTime) : (() => {
+                      const isToday = puzzleMeta.date === getLocalDateString();
+                      if (isToday && savedDailyProgress !== null) {
+                        // savedDailyProgress is non-null here due to the check above
+                        const progressData = savedDailyProgress!;
+                        if (progressData.timerSeconds > 0) {
+                          return formatTime(progressData.timerSeconds);
+                        }
+                      }
+                      return '—';
+                    })()}
                   </p>
                 </div>
               </div>
@@ -2472,23 +2492,23 @@ const App: React.FC = () => {
               <div className="mt-4 grid gap-4 sm:grid-cols-2 md:gap-5 lg:gap-6">
                 <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
                   <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Siege</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.wins}</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats!.wins}</p>
                 </div>
                 <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
                   <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Punkte</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.points}</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats!.points}</p>
                 </div>
                 <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
                   <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Ø Zeit</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{formatTime(Math.round(playerStats.averageTime))}</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{formatTime(Math.round(playerStats!.averageTime))}</p>
                 </div>
                 <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
                   <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Ø Fehler</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.averageMistakes.toFixed(1)}</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats!.averageMistakes.toFixed(1)}</p>
                 </div>
                 <div className="p-4 sm:col-span-2 md:p-5 lg:p-6 bg-slate-50">
                   <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Gesamtspiele</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.games}</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats!.games}</p>
                 </div>
               </div>
             )}
