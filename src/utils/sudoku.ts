@@ -160,3 +160,56 @@ export const checkWin = (board: Board, solved: Board): boolean => {
     return true;
 };
 
+// Validate that a board state has no duplicate numbers in rows, columns, or boxes
+export const isValidBoardState = (board: Board): boolean => {
+  // Check rows
+  for (let row = 0; row < 9; row++) {
+    const seen = new Set<number>();
+    for (let col = 0; col < 9; col++) {
+      const value = board[row][col];
+      if (value !== BLANK) {
+        if (seen.has(value)) {
+          return false; // Duplicate in row
+        }
+        seen.add(value);
+      }
+    }
+  }
+
+  // Check columns
+  for (let col = 0; col < 9; col++) {
+    const seen = new Set<number>();
+    for (let row = 0; row < 9; row++) {
+      const value = board[row][col];
+      if (value !== BLANK) {
+        if (seen.has(value)) {
+          return false; // Duplicate in column
+        }
+        seen.add(value);
+      }
+    }
+  }
+
+  // Check 3x3 boxes
+  for (let boxRow = 0; boxRow < 3; boxRow++) {
+    for (let boxCol = 0; boxCol < 3; boxCol++) {
+      const seen = new Set<number>();
+      const startRow = boxRow * 3;
+      const startCol = boxCol * 3;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const value = board[startRow + i][startCol + j];
+          if (value !== BLANK) {
+            if (seen.has(value)) {
+              return false; // Duplicate in box
+            }
+            seen.add(value);
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+};
+

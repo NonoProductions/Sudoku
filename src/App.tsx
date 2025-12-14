@@ -5,6 +5,7 @@ import {
   type Difficulty,
   type GameMode,
   checkWin,
+  isValidBoardState,
 } from './utils/sudoku';
 import {
   Timer,
@@ -17,6 +18,10 @@ import {
   Undo2,
   Menu,
   CalendarDays,
+  Home,
+  BarChart3,
+  Settings,
+  Play,
 } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 
@@ -69,7 +74,7 @@ const LoginForm: React.FC<{ onLogin: (username: PlayerName, password: string) =>
       )}
       <button
         type="submit"
-        className="w-full rounded-xl px-4 py-3 text-base font-semibold text-white transition"
+        className="w-full px-4 py-3 text-base font-semibold text-white transition"
         style={{
           backgroundColor: username === 'Sandy' ? '#d4a55e' : (username === 'Noe' ? '#3f3f3f' : '#0f172a'),
           borderColor: username === 'Sandy' ? '#d4a55e' : (username === 'Noe' ? '#53cd69' : '#0f172a'),
@@ -251,6 +256,7 @@ const App: React.FC = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>('Medium');
   const [board, setBoard] = useState<Cell[][]>([]);
   const [solvedBoard, setSolvedBoard] = useState<BoardType>([]);
+  const [hasStartedGame, setHasStartedGame] = useState(false); // New state to track if a game is active
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   const [lives, setLives] = useState(3);
   const [timer, setTimer] = useState(0);
@@ -281,7 +287,8 @@ const App: React.FC = () => {
     localStorage.setItem('sudoku-profile-id', generated);
     return generated;
   });
-  const [view, setView] = useState<ViewMode>('game');
+  const [view, setView] = useState<ViewMode>('menu');
+  const [menuTab, setMenuTab] = useState<'home' | 'daily' | 'stats'>('home');
   const [isDailyMode, setIsDailyMode] = useState(false);
   const [hasDailyPuzzle, setHasDailyPuzzle] = useState(true);
   const [isDailyCompleted, setIsDailyCompleted] = useState(false);
@@ -615,6 +622,7 @@ const App: React.FC = () => {
       const { initial, solved } = generateSudoku(diff);
       applyPuzzleToState(initial, solved, { mode: 'free', difficulty: diff });
       setSelectedMode(diff);
+      setHasStartedGame(true); // Mark game as started
       setView('game');
     },
     [applyPuzzleToState, difficulty],
@@ -749,6 +757,22 @@ const App: React.FC = () => {
       }
       setHasDailyPuzzle(puzzle.puzzle_date === today);
 
+      if (!options?.metadataOnly) {
+         setHasStartedGame(false); // Reset when loading a new daily puzzle
+      }
+
+      // Validate the initial_grid from database - if invalid, log error and try to fix
+      if (!isValidBoardState(puzzle.initial_grid)) {
+        console.error('ERROR: Daily puzzle initial_grid is invalid (contains duplicates)! Puzzle ID:', puzzle.id);
+        console.error('Invalid initial_grid:', JSON.stringify(puzzle.initial_grid, null, 2));
+        // Don't load corrupted puzzle - set error instead
+        setPuzzleError('Das tägliche Sudoku ist beschädigt. Bitte versuche es später erneut oder kontaktiere den Administrator.');
+        setHasDailyPuzzle(false);
+        setIsLoadingPuzzle(false);
+        if (options?.navigate) setView('game');
+        return;
+      }
+
       // Check if there's saved progress for this puzzle
       let savedProgress: { current_grid?: any; timer_seconds?: number; lives_remaining?: number; mistakes?: number } | null = null;
       setIsDailyCompleted(false); // Reset by default
@@ -831,11 +855,13 @@ const App: React.FC = () => {
         isDailyModeRef.current &&
         gameStateRef.current === 'playing';
 
+      setHasStartedGame(true); // Mark game as started
+
       if (shouldResumeExisting) {
         loadTodayResults(puzzle.id);
         if (options?.navigate) setView('game');
       } else if (savedProgress && savedProgress.current_grid) {
-        // Restore saved progress
+        // Restore saved progress - but validate it first
         setSelectedMode('Täglisches Sodoku');
         const restoredBoard = savedProgress.current_grid.map((row: any[]) =>
           row.map((cell: any) => ({
@@ -845,37 +871,83 @@ const App: React.FC = () => {
           }))
         );
         
-        setBoard(restoredBoard);
-        setSolvedBoard(puzzle.solution_grid);
-        setLives(savedProgress.lives_remaining ?? 3);
-        setTimer(savedProgress.timer_seconds ?? 0);
-        setGameState('playing');
-        setSelected(null);
-        setFocusValue(null);
-        setCellFeedback({});
-        setHistory([]);
-        setMistakes(0);
-        setIsDailyMode(true);
-        setDifficulty(puzzle.difficulty ?? difficulty);
-        // Only set puzzleMeta if puzzle date is today
-        if (puzzle.puzzle_date === today) {
-          setPuzzleMeta({
-            id: puzzle.id,
-            date: puzzle.puzzle_date,
-            difficulty: puzzle.difficulty ?? difficulty,
-          });
-          attemptSubmittedRef.current = false;
-          loadTodayResults(puzzle.id);
+        // Convert to BoardType for validation
+        const boardForValidation: BoardType = restoredBoard.map((row: Cell[]) => 
+          row.map((cell: Cell) => cell.value)
+        );
+        
+        // Validate the restored board - if invalid, start fresh instead
+        if (!isValidBoardState(boardForValidation)) {
+          console.warn('Restored board state is invalid (contains duplicates), starting fresh instead');
+          // Delete corrupted progress from database
+          if (playerName.trim() && puzzle.id) {
+            supabase
+              .from('daily_progress')
+              .delete()
+              .eq('puzzle_id', puzzle.id)
+              .eq('player_name', playerName.trim())
+              .then(({ error }) => {
+                if (error) {
+                  console.error('Error deleting corrupted progress:', error);
+                } else {
+                  console.log('Corrupted progress deleted successfully');
+                }
+              });
+          }
+          // Start fresh instead of restoring corrupted data
+          if (puzzle.puzzle_date === today) {
+            applyPuzzleToState(puzzle.initial_grid, puzzle.solution_grid, {
+              id: puzzle.id,
+              mode: 'daily',
+              date: puzzle.puzzle_date,
+              difficulty: puzzle.difficulty ?? difficulty,
+            });
+            loadTodayResults(puzzle.id);
+          } else {
+            // Puzzle date is not today - clear puzzleMeta
+            setPuzzleMeta({
+              id: null,
+              date: null,
+              difficulty: difficulty,
+            });
+            setSavedDailyProgress(null);
+            setTodayResults([]); // Clear today's results
+            setTeamProgress(new Map()); // Clear team progress
+          }
         } else {
-          // Puzzle date is not today - clear puzzleMeta
-          setPuzzleMeta({
-            id: null,
-            date: null,
-            difficulty: difficulty,
-          });
-          setSavedDailyProgress(null);
-          setTodayResults([]); // Clear today's results
-          setTeamProgress(new Map()); // Clear team progress
+          // Board is valid, restore it
+          setBoard(restoredBoard);
+          setSolvedBoard(puzzle.solution_grid);
+          setLives(savedProgress.lives_remaining ?? 3);
+          setTimer(savedProgress.timer_seconds ?? 0);
+          setGameState('playing');
+          setSelected(null);
+          setFocusValue(null);
+          setCellFeedback({});
+          setHistory([]);
+          setMistakes(0);
+          setIsDailyMode(true);
+          setDifficulty(puzzle.difficulty ?? difficulty);
+          // Only set puzzleMeta if puzzle date is today
+          if (puzzle.puzzle_date === today) {
+            setPuzzleMeta({
+              id: puzzle.id,
+              date: puzzle.puzzle_date,
+              difficulty: puzzle.difficulty ?? difficulty,
+            });
+            attemptSubmittedRef.current = false;
+            loadTodayResults(puzzle.id);
+          } else {
+            // Puzzle date is not today - clear puzzleMeta
+            setPuzzleMeta({
+              id: null,
+              date: null,
+              difficulty: difficulty,
+            });
+            setSavedDailyProgress(null);
+            setTodayResults([]); // Clear today's results
+            setTeamProgress(new Map()); // Clear team progress
+          }
         }
       } else {
         // Start fresh
@@ -938,7 +1010,8 @@ const App: React.FC = () => {
       if (mode === 'Täglisches Sodoku') {
         setSelectedMode('Täglisches Sodoku');
         localStorage.setItem('sudoku-selected-mode', 'Täglisches Sodoku');
-        loadDailyPuzzle({ navigate: true });
+        // loadDailyPuzzle({ navigate: true }); // No longer auto-navigate to game
+        loadDailyPuzzle({ navigate: false }); // Just load data, don't start
       } else {
         // Free play mode
         const diff = mode as Difficulty;
@@ -1479,6 +1552,20 @@ const App: React.FC = () => {
         }))
       );
       
+      // Validate board state before saving - prevent saving corrupted data
+      const boardForValidation: BoardType = board.map(row => row.map(cell => cell.value));
+      if (!isValidBoardState(boardForValidation)) {
+        console.error('ERROR: Attempted to save invalid board state (contains duplicates)! Not saving to prevent corruption.');
+        console.error('Invalid board state:', JSON.stringify(boardForValidation, null, 2));
+        // Don't save corrupted data - instead, delete any existing corrupted progress
+        await supabase
+          .from('daily_progress')
+          .delete()
+          .eq('puzzle_id', puzzleMeta.id)
+          .eq('player_name', playerName.trim());
+        return;
+      }
+      
       const payload = {
         player_name: playerName.trim(),
         puzzle_id: puzzleMeta.id,
@@ -1525,6 +1612,14 @@ const App: React.FC = () => {
             notes: Array.from(cell.notes),
           }))
         );
+        
+        // Validate board state before saving - prevent saving corrupted data
+        const boardForValidation: BoardType = boardRef.current.map(row => row.map(cell => cell.value));
+        if (!isValidBoardState(boardForValidation)) {
+          console.error('ERROR: Attempted to sync invalid board state (contains duplicates)! Not syncing to prevent corruption.');
+          // Don't save corrupted data
+          return;
+        }
         
         const syncPayload = {
           player_name: playerName.trim(),
@@ -1578,8 +1673,8 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen w-full text-slate-900 flex items-center justify-center px-4" style={{ backgroundColor: '#f9fafb' } as React.CSSProperties}>
         <div 
-          className="w-full max-w-md rounded-2xl border border-slate-200 p-8 shadow-sm"
-          style={{ backgroundColor: '#ffffff' } as React.CSSProperties}
+          className="w-full max-w-md p-8"
+          style={{ backgroundColor: 'transparent' } as React.CSSProperties}
         >
           <h1 className="text-2xl font-semibold text-slate-900 mb-2">Sudoku</h1>
           <p className="text-sm text-slate-500 mb-6">Bitte melde dich an, um zu spielen.</p>
@@ -1590,29 +1685,368 @@ const App: React.FC = () => {
   }
 
   if (view === 'menu') {
-    const menuBgColor = playerName === 'Sandy' ? '#edafb8' : (playerName === 'Noe' ? '#282828' : '#f8fafc');
+    const themeColor = playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#64748b');
+    const bgColor = playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#282828' : '#dedbd2');
+    const textColor = playerName === 'Noe' ? '#ffffff' : '#0f172a';
+    const cardBg = playerName === 'Noe' ? '#3f3f3f' : '#ffffff';
+    const activeTabColor = playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#53cd69' : '#0f172a');
+
+    return (
+      <div 
+        className="min-h-screen w-full relative flex flex-col"
+        style={{ backgroundColor: bgColor, color: textColor } as React.CSSProperties}
+      >
+        <header className="sticky top-0 z-10 px-6 py-4 backdrop-blur-xl border-b border-black/5 flex items-center justify-between shadow-sm"
+          style={{ backgroundColor: bgColor + 'ee', borderColor: playerName === 'Noe' ? '#3f3f3f' : 'rgba(0,0,0,0.05)' }}>
+           <h1 className="text-xl font-bold">
+             {menuTab === 'home' ? 'Sudoku' : menuTab === 'daily' ? 'Täglich' : 'Statistiken'}
+           </h1>
+           <button
+              onClick={() => setView('game')}
+              className="p-2 rounded-full hover:bg-black/5 active:scale-95 transition"
+              title="Zurück zum Spiel"
+           >
+             <X className="h-6 w-6" />
+           </button>
+        </header>
+
+        <main className="flex-1 overflow-y-auto p-4 pb-32 space-y-6">
+          
+          {menuTab === 'home' && (
+             <div className="space-y-6 max-w-lg mx-auto w-full">
+                {/* Profil Section */}
+                <section className="rounded-3xl p-6 shadow-sm backdrop-blur-md transition-all hover:shadow-lg border border-black/5" style={{ backgroundColor: cardBg }}>
+                   <div className="flex items-center gap-4 mb-6">
+                      <div className="h-16 w-16 rounded-full flex items-center justify-center text-2xl font-bold shadow-inner" 
+                           style={{ backgroundColor: themeColor, color: '#fff' }}>
+                        {playerName.charAt(0)}
+                      </div>
+                      <div>
+                        <h2 className="text-2xl font-bold">{playerName}</h2>
+                        <p className="text-sm opacity-60 font-medium">Sudoku Meister</p>
+                      </div>
+                   </div>
+
+                   {/* Team Card embedded */}
+                   <div className="rounded-2xl bg-black/5 p-4 relative overflow-hidden group">
+                      <div className="absolute top-0 right-0 p-3 opacity-10 transform translate-x-2 -translate-y-2 transition-transform group-hover:scale-110">
+                        <Heart className="w-16 h-16 fill-current" />
+                      </div>
+                      
+                      <div className="relative z-10">
+                        <p className="text-xs font-bold uppercase tracking-wider opacity-60 mb-1">Dein Team</p>
+                        {teamName ? (
+                          <>
+                             <p className="text-lg font-bold mb-3">{teamName}</p>
+                             <div className="flex -space-x-3 overflow-hidden">
+                                {teamPlayerNames ? (
+                                  <>
+                                    <div className="inline-block h-8 w-8 rounded-full ring-2 ring-white flex items-center justify-center text-xs font-bold bg-slate-200 text-slate-600" title={teamPlayerNames.player1}>
+                                      {teamPlayerNames.player1.charAt(0)}
+                                    </div>
+                                    <div className="inline-block h-8 w-8 rounded-full ring-2 ring-white flex items-center justify-center text-xs font-bold bg-slate-300 text-slate-700" title={teamPlayerNames.player2}>
+                                      {teamPlayerNames.player2.charAt(0)}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="h-8 w-8 rounded-full bg-slate-200 animate-pulse"></div>
+                                )}
+                             </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-2 text-sm opacity-70">
+                            <span>Kein Team zugewiesen</span>
+                          </div>
+                        )}
+                      </div>
+                   </div>
+                </section>
+
+                {/* Game Mode Section */}
+                <section className="rounded-3xl p-6 shadow-sm backdrop-blur-md transition-all hover:shadow-lg border border-black/5" style={{ backgroundColor: cardBg }}>
+                   <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+                     <Settings className="w-5 h-5" style={{ color: themeColor }} />
+                     Spielmodus
+                   </h2>
+                   
+                   <div className="grid grid-cols-2 gap-3 mb-4">
+                      {['Täglisches Sodoku', 'Freies Spiel'].map((modeType) => {
+                        const isActive = (modeType === 'Täglisches Sodoku' && selectedMode === 'Täglisches Sodoku') ||
+                                         (modeType === 'Freies Spiel' && selectedMode !== 'Täglisches Sodoku');
+                        
+                        return (
+                          <button
+                            key={modeType}
+                            onClick={() => {
+                              if (modeType === 'Täglisches Sodoku') {
+                                handleModeSwitch('Täglisches Sodoku');
+                                setMenuTab('daily');
+                              } else if (selectedMode === 'Täglisches Sodoku') {
+                                handleModeSwitch('Medium'); // Default to Medium for free play
+                              }
+                            }}
+                            className={`p-3 rounded-xl text-sm font-bold transition-all ${isActive ? 'shadow-md scale-[1.02]' : 'hover:bg-black/5 opacity-70'}`}
+                            style={{ 
+                              backgroundColor: isActive ? themeColor : 'rgba(0,0,0,0.05)',
+                              color: isActive ? '#fff' : 'inherit'
+                            }}
+                          >
+                            {modeType}
+                          </button>
+                        );
+                      })}
+                   </div>
+
+                   {/* Difficulty Selector (only for Free Play) */}
+                   {selectedMode !== 'Täglisches Sodoku' && (
+                     <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                        <p className="text-xs font-bold uppercase tracking-wider opacity-60 pl-1">Schwierigkeit</p>
+                        <div className="grid grid-cols-3 gap-2">
+                           {['Easy', 'Medium', 'Hard'].map((diff) => (
+                             <button
+                               key={diff}
+                               onClick={() => handleModeSwitch(diff as GameMode)}
+                               className={`py-2 px-1 rounded-lg text-xs font-bold transition-all border-2`}
+                               style={{ 
+                                 borderColor: difficulty === diff ? themeColor : 'transparent',
+                                 backgroundColor: difficulty === diff ? (playerName === 'Noe' ? '#ffffff20' : '#00000008') : 'rgba(0,0,0,0.05)',
+                                 color: difficulty === diff ? themeColor : 'inherit',
+                                 opacity: difficulty === diff ? 1 : 0.7
+                               }}
+                             >
+                               {diff === 'Easy' ? 'Leicht' : diff === 'Medium' ? 'Mittel' : 'Schwer'}
+                             </button>
+                           ))}
+                        </div>
+                     </div>
+                   )}
+                </section>
+
+                {/* Big Action Button */}
+                <button
+                  onClick={() => {
+                    if (hasStartedGame) {
+                      setView('game');
+                    } else {
+                      if (selectedMode === 'Täglisches Sodoku') {
+                        loadDailyPuzzle({ navigate: true });
+                      } else {
+                        startNewGame(difficulty);
+                      }
+                    }
+                  }}
+                  className="w-full py-4 rounded-2xl text-lg font-bold shadow-xl transform transition hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 relative overflow-hidden group"
+                  style={{ backgroundColor: themeColor, color: '#fff' }}
+                >
+                   <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                   {hasStartedGame ? <Undo2 className="h-6 w-6" /> : <Play className="h-6 w-6" />}
+                   <span>{hasStartedGame ? 'Zurück zum Spiel' : 'Neues Spiel starten'}</span>
+                </button>
+             </div>
+          )}
+
+          {menuTab === 'daily' && (
+            <div className="space-y-6 max-w-lg mx-auto w-full">
+               <section className="rounded-2xl p-6 shadow-md backdrop-blur-sm relative overflow-hidden text-white" 
+                        style={{ background: `linear-gradient(135deg, ${themeColor}, ${playerName === 'Sandy' ? '#e8bc75' : '#4ade80'})` }}>
+                  <div className="absolute top-0 right-0 p-4 opacity-20">
+                    <CalendarDays className="w-32 h-32 transform rotate-12 translate-x-8 -translate-y-8" />
+                  </div>
+                  <div className="relative z-10">
+                    <h2 className="text-2xl font-bold mb-2 text-shadow-sm">Tägliches Sudoku</h2>
+                    <p className="opacity-90 mb-6 text-sm font-medium">Jeden Tag eine neue Herausforderung für dein Team.</p>
+                    
+                     <button
+                      onClick={() => loadDailyPuzzle({ navigate: true })}
+                      disabled={isLoadingPuzzle || !hasDailyPuzzle || isDailyCompleted}
+                      className="w-full py-3.5 rounded-xl font-bold text-slate-900 bg-white shadow-lg transition transform active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                     >
+                      {isLoadingPuzzle ? 'Lädt…' : isDailyCompleted ? 'Bereits abgeschlossen' : hasDailyPuzzle ? 'Jetzt Spielen' : 'Bald verfügbar'}
+                     </button>
+
+                     <div className="grid grid-cols-2 gap-3 mt-6">
+                        <div className="bg-black/10 backdrop-blur-md rounded-xl p-3 border border-white/10">
+                          <span className="block text-xs font-bold uppercase opacity-70">Datum</span>
+                          <span className="font-mono text-lg font-bold">{puzzleMeta.id && puzzleMeta.date === getLocalDateString() ? puzzleMeta.date : '—'}</span>
+                        </div>
+                        <div className="bg-black/10 backdrop-blur-md rounded-xl p-3 border border-white/10">
+                           <span className="block text-xs font-bold uppercase opacity-70">Status</span>
+                           <span className="font-bold text-sm truncate">{dailyStatusLabel}</span>
+                        </div>
+                     </div>
+                  </div>
+               </section>
+
+               <section className="rounded-2xl p-5 shadow-sm backdrop-blur-sm" style={{ backgroundColor: cardBg }}>
+                  <div className="flex items-center gap-2 mb-4">
+                      <Trophy className="h-5 w-5" style={{ color: themeColor }} />
+                      <h3 className="font-bold text-lg">Ergebnisse von Heute</h3>
+                  </div>
+                  
+                  {(() => {
+                    const today = getLocalDateString();
+                    if (puzzleMeta.date !== today || !puzzleMeta.id) return <p className="text-sm opacity-60">Noch keine Ergebnisse für heute.</p>;
+                    
+                    const filteredTeamProgress = new Map<string, TeamProgressEntry>();
+                    if (puzzleMeta.date === today) {
+                      teamProgress.forEach((value, key) => filteredTeamProgress.set(key, value));
+                    }
+                    
+                    const hasAnyResults = expectedPlayers.some(name => {
+                      const normalized = name.trim().toLowerCase();
+                      return todaysResultMap.get(normalized) || filteredTeamProgress.get(normalized);
+                    });
+                    
+                    if (!hasAnyResults) return <p className="text-sm opacity-60">Noch hat niemand gespielt.</p>;
+
+                    return (
+                      <div className="space-y-3">
+                        {expectedPlayers.map((name) => {
+                          const normalized = name.trim().toLowerCase();
+                          const entry = todaysResultMap.get(normalized);
+                          const progress = filteredTeamProgress.get(normalized);
+                          if (!entry && !progress) return null;
+
+                          return (
+                            <div key={name} className="flex flex-col gap-1 p-3 rounded-xl bg-black/5">
+                               <div className="flex justify-between items-center">
+                                  <span className="font-bold">{name}</span>
+                                  {entry && entry.submittedAt && <span className="text-xs opacity-60">{new Date(entry.submittedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                               </div>
+                               {entry ? (
+                                  <div className="text-sm opacity-80 flex gap-3">
+                                     <span>⏱️ {formatTime(entry.durationSeconds ?? 0)}</span>
+                                     <span>❌ {entry.mistakes}</span>
+                                     <span className="font-bold" style={{ color: themeColor }}>{entry.points} Pkt</span>
+                                  </div>
+                               ) : progress ? (
+                                  <div className="text-sm opacity-80">
+                                     {progress.status} · {progress.completionPercent}%
+                                  </div>
+                               ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+               </section>
+
+               <section className="rounded-2xl p-5 shadow-sm backdrop-blur-sm" style={{ backgroundColor: cardBg }}>
+                  <div className="flex items-center gap-2 mb-4">
+                      <BarChart3 className="h-5 w-5" style={{ color: themeColor }} />
+                      <h3 className="font-bold text-lg">Bestenliste</h3>
+                  </div>
+                  
+                   {leaderboard.length === 0 ? (
+                      <p className="text-sm opacity-60">Noch keine Ranglisteneinträge.</p>
+                   ) : (
+                      <ul className="space-y-3">
+                        {leaderboard.map((entry, index) => (
+                          <li key={entry.playerName} className="flex items-center justify-between p-3 rounded-xl hover:bg-black/5 transition">
+                             <div className="flex items-center gap-3">
+                                <span className="font-bold opacity-50 w-6">#{index + 1}</span>
+                                <div>
+                                   <p className="font-bold">{entry.playerName}</p>
+                                   <p className="text-xs opacity-60">{entry.wins} Siege</p>
+                                </div>
+                             </div>
+                             <span className="font-bold text-lg" style={{ color: themeColor }}>{entry.points}</span>
+                          </li>
+                        ))}
+                      </ul>
+                   )}
+               </section>
+            </div>
+          )}
+
+          {menuTab === 'stats' && (
+             <div className="space-y-6 max-w-lg mx-auto w-full">
+                <section className="rounded-2xl p-6 shadow-sm backdrop-blur-sm text-center" style={{ backgroundColor: cardBg }}>
+                   <div className="mb-6">
+                      <h2 className="text-2xl font-bold">Deine Statistiken</h2>
+                      <p className="text-sm opacity-60">Deine gesamte Sudoku-Karriere</p>
+                   </div>
+                   
+                   {!playerStats ? (
+                      <p className="opacity-60">Spiele ein Puzzle, um Statistiken zu sehen.</p>
+                   ) : (
+                      <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-black/5 p-4 rounded-2xl">
+                             <p className="text-xs uppercase font-bold opacity-50 mb-1">Siege</p>
+                             <p className="text-3xl font-bold" style={{ color: themeColor }}>{playerStats.wins}</p>
+                          </div>
+                          <div className="bg-black/5 p-4 rounded-2xl">
+                             <p className="text-xs uppercase font-bold opacity-50 mb-1">Punkte</p>
+                             <p className="text-3xl font-bold" style={{ color: themeColor }}>{playerStats.points}</p>
+                          </div>
+                          <div className="bg-black/5 p-4 rounded-2xl">
+                             <p className="text-xs uppercase font-bold opacity-50 mb-1">Ø Zeit</p>
+                             <p className="text-xl font-bold">{formatTime(Math.round(playerStats.averageTime))}</p>
+                          </div>
+                          <div className="bg-black/5 p-4 rounded-2xl">
+                             <p className="text-xs uppercase font-bold opacity-50 mb-1">Spiele</p>
+                             <p className="text-xl font-bold">{playerStats.games}</p>
+                          </div>
+                      </div>
+                   )}
+                </section>
+             </div>
+          )}
+
+        </main>
+
+        <nav className="fixed bottom-0 left-0 right-0 backdrop-blur-lg border-t border-black/5 pb-safe z-50 transition-all"
+             style={{ backgroundColor: playerName === 'Noe' ? '#1e1e1e99' : '#ffffffcc' }}>
+           <div className="flex justify-around items-center p-2 max-w-md mx-auto">
+              <button 
+                onClick={() => setMenuTab('home')} 
+                className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all w-24 ${menuTab === 'home' ? 'bg-black/5 scale-105' : 'opacity-40 hover:opacity-70'}`}
+                style={{ color: menuTab === 'home' ? activeTabColor : 'inherit' }}
+              >
+                 <Home className={`w-6 h-6 ${menuTab === 'home' ? 'fill-current' : ''}`} />
+                 <span className="text-[10px] font-extrabold uppercase tracking-widest">Home</span>
+              </button>
+              
+              <button 
+                onClick={() => setMenuTab('daily')} 
+                className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all w-24 ${menuTab === 'daily' ? 'bg-black/5 scale-105' : 'opacity-40 hover:opacity-70'}`}
+                style={{ color: menuTab === 'daily' ? activeTabColor : 'inherit' }}
+              >
+                 <CalendarDays className={`w-6 h-6 ${menuTab === 'daily' ? 'fill-current' : ''}`} />
+                 <span className="text-[10px] font-extrabold uppercase tracking-widest">Täglich</span>
+              </button>
+
+              <button 
+                onClick={() => setMenuTab('stats')} 
+                className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all w-24 ${menuTab === 'stats' ? 'bg-black/5 scale-105' : 'opacity-40 hover:opacity-70'}`}
+                style={{ color: menuTab === 'stats' ? activeTabColor : 'inherit' }}
+              >
+                 <BarChart3 className={`w-6 h-6 ${menuTab === 'stats' ? 'fill-current' : ''}`} />
+                 <span className="text-[10px] font-extrabold uppercase tracking-widest">Statistik</span>
+              </button>
+           </div>
+        </nav>
+      </div>
+    );
+  }
+
+  if (false) {
     return (
       <div 
         className="min-h-screen w-full"
         style={{ 
-          backgroundColor: menuBgColor,
+          backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#282828' : '#dedbd2'),
           color: playerName === 'Noe' ? '#ffffff' : '#0f172a'
         } as React.CSSProperties}
       >
         <div className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 px-4 py-6 md:max-w-5xl md:gap-8 md:px-6 md:py-8 lg:max-w-6xl lg:gap-10 lg:px-8">
-          <section 
-            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
             <div className="flex flex-wrap items-center justify-between gap-4 md:gap-6">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-widest md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Menü</p>
-                <h1 className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Gemeinsames Sudoku</h1>
-                <p className="mt-1 text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                <p className="text-xs font-semibold uppercase tracking-widest md:text-sm" style={{ color: playerName === 'Noe' ? '#94a3b8' : '#64748b' } as React.CSSProperties}>Menü</p>
+                <h1 className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties}>Gemeinsames Sudoku</h1>
+                <p className="mt-1 text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#94a3b8' : '#64748b' } as React.CSSProperties}>
                   Hier verwaltest du Namen, tägliche Rätsel und das Leaderboard.
                 </p>
               </div>
@@ -1637,17 +2071,10 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <section 
-            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
             <div className="flex flex-col gap-5 md:gap-6 lg:gap-8">
               <div className="space-y-3 md:space-y-4">
-                <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Spieler</h2>
+                <h2 className="text-lg font-semibold md:text-xl lg:text-2xl">Spieler</h2>
                 <div className="space-y-2">
                   <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Dein Name</label>
                   <div className="flex gap-2">
@@ -1672,18 +2099,11 @@ const App: React.FC = () => {
                 )}
               </div>
 
-              <div 
-                className="rounded-2xl border p-4 md:p-5 lg:p-6"
-                style={{ 
-                  backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                  borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                  color: playerName === 'Noe' ? '#ffffff' : undefined
-                } as React.CSSProperties}
-              >
+              <div className="p-4 md:p-5 lg:p-6">
                 <div className="flex flex-wrap items-center justify-between gap-2 md:gap-3">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Team</p>
-                    <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Du und dein Partner spielen zusammen.</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide md:text-sm text-slate-500">Team</p>
+                    <p className="text-xs md:text-sm lg:text-base text-slate-600">Du und dein Partner spielen zusammen.</p>
                   </div>
                 </div>
                 {teamError && <p className="mt-2 text-xs text-rose-500">{teamError}</p>}
@@ -1695,14 +2115,7 @@ const App: React.FC = () => {
                     {teamLoading ? (
                       <p className="text-xs text-slate-400">Synchronisiere Team…</p>
                     ) : (
-                      <div 
-                        className="space-y-2 rounded-2xl border p-3"
-                        style={{ 
-                          backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                          borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                          color: playerName === 'Noe' ? '#ffffff' : undefined
-                        } as React.CSSProperties}
-                      >
+                      <div className="space-y-2 p-3 bg-slate-50">
                         {/* Zeige beide Spieler aus teamPlayerNames an, wenn verfügbar */}
                         {teamPlayerNames ? (
                           <>
@@ -1769,18 +2182,44 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <section 
-            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl mb-4 md:mb-5 lg:mb-6">Spielmodus & Schwierigkeit</h2>
+            <div className="mt-4">
+              <button
+                className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium hover:bg-slate-50 md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg text-slate-700"
+                onClick={() => setShowDifficultyOptions((prev) => !prev)}
+              >
+                <span>Modus: {selectedMode === 'Täglisches Sodoku' ? 'Täglisches Sodoku' : `Schwierigkeit: ${difficulty}`}</span>
+                <ChevronDown
+                  className={`h-4 w-4 transition-transform md:h-5 md:w-5 lg:h-6 lg:w-6 ${showDifficultyOptions ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {showDifficultyOptions && (
+                <div className="mt-2 md:mt-3 bg-slate-50">
+                  {gameModes.map((mode) => (
+                    <button
+                      key={mode}
+                      className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg ${
+                        mode === selectedMode ? 'bg-slate-100 font-semibold text-slate-900' : 'text-slate-600'
+                      }`}
+                      onClick={() => {
+                        handleModeSwitch(mode);
+                      }}
+                    >
+                      {mode}
+                      {mode === selectedMode && <span className="text-xs uppercase md:text-sm">aktiv</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
             <div className="flex flex-wrap items-center justify-between gap-3 md:gap-4 lg:gap-6">
               <div>
-                <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Tägliches Sudoku</h2>
-                <p className="text-sm md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                <h2 className="text-lg font-semibold md:text-xl lg:text-2xl">Tägliches Sudoku</h2>
+                <p className="text-sm md:text-base lg:text-lg text-slate-600">
                   Ihr beide bekommt jeden Tag dasselbe Rätsel. Gewinne bringen 100 Punkte.
                 </p>
               </div>
@@ -1796,62 +2235,48 @@ const App: React.FC = () => {
                 {isLoadingPuzzle ? 'Lädt…' : isDailyCompleted ? 'Bereits abgeschlossen' : hasDailyPuzzle ? 'Heutiges Sudoku starten' : 'Noch nicht verfügbar'}
               </button>
             </div>
-            <div 
-              className="mt-4 grid gap-3 rounded-2xl border p-4 text-sm sm:grid-cols-2 md:gap-4 md:p-5 md:text-base lg:gap-5 lg:p-6 lg:text-lg"
-              style={{ 
-                backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                color: playerName === 'Noe' ? '#ffffff' : '#475569'
-              } as React.CSSProperties}
-            >
+            <div className="mt-4 grid gap-3 p-4 text-sm sm:grid-cols-2 md:gap-4 md:p-5 md:text-base lg:gap-5 lg:p-6 lg:text-lg bg-slate-50">
               <div>
-                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Datum</p>
-                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Datum</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
                   {puzzleMeta.id && puzzleMeta.date === getLocalDateString() ? puzzleMeta.date : 'Noch nicht geladen'}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Schwierigkeit</p>
-                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Schwierigkeit</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
                   {puzzleMeta.id && puzzleMeta.date === getLocalDateString() ? puzzleMeta.difficulty : '—'}
                 </p>
               </div>
               {dailyStatusLabel !== 'Noch nicht gestartet' && (
                 <div>
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Fortschritt</p>
-                  <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Fortschritt</p>
+                  <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
                     {puzzleMeta.date === getLocalDateString() && savedDailyProgress && savedDailyProgress.completionPercent > 0 ? `${savedDailyProgress.completionPercent}%` : (isDailyMode ? formatTime(displayTime) : '0%')}
                   </p>
                 </div>
               )}
               <div className="sm:col-span-2">
-                <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Status</p>
-                <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Status</p>
+                <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">
                   {hasDailyPuzzle ? 'Bereit zum Spielen' : 'Noch nicht veröffentlicht'}
                 </p>
               </div>
             </div>
-            <div 
-              className="mt-4 rounded-2xl border p-4 md:p-5 lg:p-6"
-              style={{ 
-                backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                color: playerName === 'Noe' ? '#ffffff' : undefined
-              } as React.CSSProperties}
-            >
+            <div className="mt-4 p-4 md:p-5 lg:p-6 bg-slate-50">
               <div className="flex flex-wrap items-center justify-between gap-2 md:gap-3">
                 <div>
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktueller Stand</p>
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Aktueller Stand</p>
                   <div className="flex items-center gap-2">
-                    <p className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{dailyStatusLabel}</p>
+                    <p className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">{dailyStatusLabel}</p>
                     {(gameState === 'won' || completionPercent === 100) && isDailyMode && (
                       <Trophy className="h-5 w-5 md:h-6 md:w-6" style={{ color: playerName === 'Sandy' ? '#d295bf' : '#fbbf24' } as React.CSSProperties} />
                     )}
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Aktuelle Zeit</p>
-                  <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Aktuelle Zeit</p>
+                  <p className="text-sm font-semibold md:text-base lg:text-lg text-slate-900">
                     {dailyStatusLabel === 'Noch nicht gestartet' ? '—' : (isDailyMode ? formatTime(displayTime) : (puzzleMeta.date === getLocalDateString() && savedDailyProgress && savedDailyProgress.timerSeconds > 0) ? formatTime(savedDailyProgress.timerSeconds) : '—')}
                   </p>
                 </div>
@@ -1891,19 +2316,12 @@ const App: React.FC = () => {
               )}
             </div>
             {puzzleError && (
-              <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600 md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg">{puzzleError}</p>
+              <p className="mt-3 bg-rose-50 px-3 py-2 text-sm text-rose-600 md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg">{puzzleError}</p>
             )}
           </section>
 
-          <section 
-            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
-            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Heutige Ergebnisse</h2>
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl">Heutige Ergebnisse</h2>
             {(() => {
               const today = getLocalDateString();
               
@@ -1959,29 +2377,24 @@ const App: React.FC = () => {
                         return (
                           <div
                             key={name}
-                            className="flex flex-col gap-2 rounded-2xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:gap-3 md:px-5 md:py-4 lg:gap-4 lg:px-6 lg:py-5"
-                            style={{ 
-                              backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                              color: playerName === 'Noe' ? '#ffffff' : undefined
-                            } as React.CSSProperties}
+                            className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:gap-3 md:px-5 md:py-4 lg:gap-4 lg:px-6 lg:py-5 bg-slate-50"
                           >
                             <div>
-                              <p className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{name}</p>
+                              <p className="text-sm font-semibold md:text-base lg:text-lg text-slate-900">{name}</p>
                               {entry ? (
-                                <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                                <p className="text-xs md:text-sm lg:text-base text-slate-600">
                                   Fertig in {entry.durationSeconds ? formatTime(entry.durationSeconds) : '—'} · Fehler{' '}
                                   {entry.mistakes ?? 0} · {entry.points ?? 0} Punkte
                                 </p>
                               ) : progress ? (
-                                <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                                <p className="text-xs md:text-sm lg:text-base text-slate-600">
                                   {progress.status} · {formatTime(progress.timerSeconds)} · {progress.completionPercent}% ·
                                   Leben {progress.livesRemaining}
                                 </p>
                               ) : null}
                             </div>
                             {entry && entry.submittedAt && (
-                              <span className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>
+                              <span className="text-xs md:text-sm lg:text-base text-slate-500">
                                 {new Date(entry.submittedAt).toLocaleTimeString([], {
                                   hour: '2-digit',
                                   minute: '2-digit',
@@ -2004,17 +2417,10 @@ const App: React.FC = () => {
             )}
           </section>
 
-          <section 
-            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
-            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Leaderboard</h2>
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl">Leaderboard</h2>
             {teamName && (
-              <p className="mt-2 text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>Es werden nur die Spieler aus deinem Team angezeigt.</p>
+              <p className="mt-2 text-xs md:text-sm lg:text-base text-slate-600">Es werden nur die Spieler aus deinem Team angezeigt.</p>
             )}
             <div className="mt-4 md:mt-5 lg:mt-6">
               {leaderboardLoading ? (
@@ -2032,26 +2438,19 @@ const App: React.FC = () => {
                   {leaderboard.map((entry, index) => (
                     <li
                       key={entry.playerName}
-                      className="flex items-center justify-between rounded-xl border px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
-                      style={{ 
-                        borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                        color: playerName === 'Noe' ? '#ffffff' : undefined
-                      } as React.CSSProperties}
+                      className="flex items-center justify-between px-3 py-2 hover:bg-slate-50 md:px-4 md:py-3 lg:px-5 lg:py-4"
                     >
                       <div>
                         <div className="flex items-center gap-2 md:gap-3">
-                          <span className="text-sm font-semibold md:text-base lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>#{index + 1}</span>
-                          <span className="text-base font-semibold md:text-lg lg:text-xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{entry.playerName}</span>
+                          <span className="text-sm font-semibold md:text-base lg:text-lg text-slate-600">#{index + 1}</span>
+                          <span className="text-base font-semibold md:text-lg lg:text-xl text-slate-900">{entry.playerName}</span>
                         </div>
-                        <p className="text-xs md:text-sm lg:text-base" style={{ color: playerName === 'Noe' ? '#ffffff' : '#64748b' } as React.CSSProperties}>
+                        <p className="text-xs md:text-sm lg:text-base text-slate-600">
                           {entry.wins} Siege · Ø Zeit {formatTime(Math.round(entry.averageTime))} · Ø Fehler{' '}
                           {entry.averageMistakes.toFixed(1)}
                         </p>
                       </div>
-                      <span 
-                        className="text-lg font-bold md:text-xl lg:text-2xl"
-                        style={{ color: playerName === 'Sandy' ? '#d295bf' : '#d97706' } as React.CSSProperties}
-                      >
+                      <span className="text-lg font-bold md:text-xl lg:text-2xl text-amber-600">
                         {entry.points} P
                       </span>
                     </li>
@@ -2061,15 +2460,8 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <section 
-            className="rounded-2xl border px-4 py-5 shadow-sm md:px-6 md:py-6 lg:px-8 lg:py-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
-            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>Deine Statistiken</h2>
+          <section className="px-4 py-5 md:px-6 md:py-6 lg:px-8 lg:py-8">
+            <h2 className="text-lg font-semibold md:text-xl lg:text-2xl">Deine Statistiken</h2>
             {!playerName.trim() ? (
               <p className="mt-2 text-sm text-slate-500 md:text-base lg:text-lg">Trage zuerst deinen Namen ein.</p>
             ) : !playerStats ? (
@@ -2078,60 +2470,25 @@ const App: React.FC = () => {
               </p>
             ) : (
               <div className="mt-4 grid gap-4 sm:grid-cols-2 md:gap-5 lg:gap-6">
-                <div 
-                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
-                  style={{ 
-                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                    color: playerName === 'Noe' ? '#ffffff' : undefined
-                  } as React.CSSProperties}
-                >
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Siege</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.wins}</p>
+                <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Siege</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.wins}</p>
                 </div>
-                <div 
-                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
-                  style={{ 
-                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                    color: playerName === 'Noe' ? '#ffffff' : undefined
-                  } as React.CSSProperties}
-                >
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Punkte</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.points}</p>
+                <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Punkte</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.points}</p>
                 </div>
-                <div 
-                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
-                  style={{ 
-                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                    color: playerName === 'Noe' ? '#ffffff' : undefined
-                  } as React.CSSProperties}
-                >
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Ø Zeit</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{formatTime(Math.round(playerStats.averageTime))}</p>
+                <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Ø Zeit</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{formatTime(Math.round(playerStats.averageTime))}</p>
                 </div>
-                <div 
-                  className="rounded-2xl border p-4 md:p-5 lg:p-6"
-                  style={{ 
-                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                    color: playerName === 'Noe' ? '#ffffff' : undefined
-                  } as React.CSSProperties}
-                >
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Ø Fehler</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.averageMistakes.toFixed(1)}</p>
+                <div className="p-4 md:p-5 lg:p-6 bg-slate-50">
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Ø Fehler</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.averageMistakes.toFixed(1)}</p>
                 </div>
-                <div 
-                  className="rounded-2xl border p-4 sm:col-span-2 md:p-5 lg:p-6"
-                  style={{ 
-                    backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#f1f5f9',
-                    color: playerName === 'Noe' ? '#ffffff' : undefined
-                  } as React.CSSProperties}
-                >
-                  <p className="text-xs uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#ffffff' : '#94a3b8' } as React.CSSProperties}>Gesamtspiele</p>
-                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl" style={{ color: playerName === 'Noe' ? '#ffffff' : '#0f172a' } as React.CSSProperties}>{playerStats.games}</p>
+                <div className="p-4 sm:col-span-2 md:p-5 lg:p-6 bg-slate-50">
+                  <p className="text-xs uppercase tracking-wide md:text-sm text-slate-500">Gesamtspiele</p>
+                  <p className="text-2xl font-semibold md:text-3xl lg:text-4xl text-slate-900">{playerStats.games}</p>
                 </div>
               </div>
             )}
@@ -2145,28 +2502,33 @@ const App: React.FC = () => {
     <div 
       className="min-h-screen w-full"
       style={{ 
-        backgroundColor: playerName === 'Sandy' ? '#edafb8' : (playerName === 'Noe' ? '#282828' : '#f8fafc'),
+        backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#282828' : '#dedbd2'),
         color: playerName === 'Noe' ? '#ffffff' : '#0f172a'
       } as React.CSSProperties}
     >
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col gap-4 px-4 py-6 md:max-w-6xl md:gap-6 md:px-6 md:py-8 lg:max-w-7xl lg:gap-8 lg:px-8 lg:py-10">
         <section 
-          className="rounded-2xl border px-4 py-4 shadow-sm md:px-6 md:py-5 lg:px-8 lg:py-6"
-                        style={{ 
-                          backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#ffffff'),
-                          borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-                          color: playerName === 'Noe' ? '#ffffff' : undefined
-                        } as React.CSSProperties}
+          className="px-4 py-4 md:px-6 md:py-5 lg:px-8 lg:py-6"
         >
           <div className="flex flex-wrap items-center justify-between gap-4 md:gap-6">
-            <h1 className="text-xl font-semibold md:text-2xl lg:text-3xl" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties}>Sudoku</h1>
+            <div className="flex flex-col">
+              <h1 className="text-xl font-semibold md:text-2xl lg:text-3xl" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties}>Sudoku</h1>
+              <span className="text-xs font-medium uppercase tracking-wide md:text-sm" style={{ color: playerName === 'Noe' ? '#94a3b8' : '#64748b' } as React.CSSProperties}>
+                {selectedMode === 'Täglisches Sodoku' ? 'Tägliches Sudoku' : 
+                 difficulty === 'Easy' ? 'Leicht' : 
+                 difficulty === 'Medium' ? 'Mittel' : 
+                 difficulty === 'Hard' ? 'Schwer' : 
+                 difficulty === 'Beginner' ? 'Anfänger' : 
+                 difficulty}
+              </span>
+            </div>
             <div className="flex items-center gap-3 text-sm md:gap-4 md:text-base lg:gap-5 lg:text-lg" style={{ color: playerName === 'Noe' ? '#ffffff' : '#475569' } as React.CSSProperties}>
               <span className="flex items-center gap-1">
-                <Timer className="h-4 w-4 md:h-5 md:w-5" style={{ color: playerName === 'Noe' ? '#ffffff' : undefined } as React.CSSProperties} />
+                <Timer className="h-4 w-4 md:h-5 md:w-5" />
                 {formatTime(displayTime)}
               </span>
               <span className="flex items-center gap-1">
-                <Heart className="h-4 w-4 md:h-5 md:w-5" style={{ color: playerName === 'Noe' ? '#ffffff' : '#ef4444' } as React.CSSProperties} />
+                <Heart className="h-4 w-4 md:h-5 md:w-5 text-rose-500" />
                 {lives}
               </span>
               <button
@@ -2189,63 +2551,168 @@ const App: React.FC = () => {
               </button>
             </div>
           </div>
-          <div className="mt-4">
-            <button
-              className="flex w-full items-center justify-between rounded-xl border px-3 py-2 text-sm font-medium md:px-4 md:py-2.5 md:text-base lg:px-5 lg:py-3 lg:text-lg"
-              style={{ 
-                backgroundColor: playerName === 'Noe' ? '#3f3f3f' : '#dedbd2',
-                borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-                color: playerName === 'Noe' ? '#ffffff' : '#334155'
-              } as React.CSSProperties}
-              onClick={() => setShowDifficultyOptions((prev) => !prev)}
-            >
-              <span>Modus: {selectedMode === 'Täglisches Sodoku' ? 'Täglisches Sodoku' : `Schwierigkeit: ${difficulty}`}</span>
-              <ChevronDown
-                className={`h-4 w-4 transition-transform md:h-5 md:w-5 lg:h-6 lg:w-6 ${showDifficultyOptions ? 'rotate-180' : ''}`}
-              />
-            </button>
-            {showDifficultyOptions && (
-              <div 
-                className="mt-2 rounded-xl border shadow-sm md:mt-3"
-                style={{ 
-                  backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#ffffff'),
-                  borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-                  color: playerName === 'Noe' ? '#ffffff' : undefined
-                } as React.CSSProperties}
-              >
-                {gameModes.map((mode) => (
-                  <button
-                    key={mode}
-                    className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm md:px-5 md:py-2.5 md:text-base lg:px-6 lg:py-3 lg:text-lg ${
-                      mode === selectedMode ? 'bg-slate-100 font-semibold text-slate-900' : 'text-slate-600'
-                    }`}
-                    style={{
-                      color: playerName === 'Noe' ? '#ffffff' : undefined
-                    } as React.CSSProperties}
-                    onClick={() => {
-                      handleModeSwitch(mode);
-                    }}
-                  >
-                    {mode}
-                    {mode === selectedMode && <span className="text-xs uppercase md:text-sm">aktiv</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </section>
 
         <div className="flex flex-col gap-4 md:grid md:grid-cols-[1fr_380px] md:gap-6 lg:grid-cols-[1fr_420px] lg:gap-8">
-          <section 
-            className="rounded-3xl border p-4 shadow-sm md:p-6 lg:p-8"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
-            <div className="w-full max-w-[min(95vw,700px)] aspect-square mx-auto rounded-2xl border-3 bg-slate-100 p-0 shadow-inner md:max-w-[min(95vw,800px)] lg:max-w-[min(95vw,900px)] overflow-hidden" style={{ borderColor: playerName === 'Noe' ? '#8b8b8b' : '#475569', borderWidth: '4px', borderStyle: 'solid' } as React.CSSProperties}>
-              <div className="grid h-full w-full grid-rows-9 grid-cols-9 gap-0">
+          <section className="p-2 md:p-6 lg:p-8">
+            {playerName === 'Sandy' ? (
+              <div className="w-full aspect-square mx-auto rounded-2xl bg-slate-100 p-0 shadow-inner md:max-w-[min(95vw,1000px)] lg:max-w-[min(95vw,1100px)] overflow-hidden">
+                <div className="grid h-full w-full grid-rows-9 grid-cols-9 gap-0">
+                  {board.flatMap((row, r) =>
+                    row.map((cell, c) => {
+                      const isSelected = selected?.r === r && selected?.c === c;
+                      const isRelated =
+                        selected &&
+                        !isSelected &&
+                        (selected.r === r ||
+                          selected.c === c ||
+                          (Math.floor(selected.r / 3) === Math.floor(r / 3) &&
+                            Math.floor(selected.c / 3) === Math.floor(c / 3)));
+                      const isSameValue =
+                        selected &&
+                        board[selected.r][selected.c].value !== 0 &&
+                        board[selected.r][selected.c].value === cell.value;
+                      const isError = cell.value !== 0 && cell.value !== solvedBoard[r][c];
+                      const feedbackKey = `${r}-${c}`;
+                      const feedbackState = cellFeedback[feedbackKey];
+                      const matchesFocus =
+                        focusValue !== null && cell.value === focusValue && cell.value !== 0;
+
+                      // Bestimme welche Borders dicker sein sollen
+                      const isEdgeRight = c === 8;
+                      const isEdgeBottom = r === 8;
+                      const isEdgeLeft = c === 0;
+                      const isEdgeTop = r === 0;
+                      const isBlockRight = (c + 1) % 3 === 0;
+                      const isBlockBottom = (r + 1) % 3 === 0;
+                      const isBlockLeft = c % 3 === 0;
+                      const isBlockTop = r % 3 === 0;
+                      
+                      // Dicke Borders für Außenränder und Blockgrenzen
+                      const hasThickRight = isBlockRight || isEdgeRight;
+                      const hasThickBottom = isBlockBottom || isEdgeBottom;
+                      const hasThickLeft = isBlockLeft || isEdgeLeft;
+                      const hasThickTop = isBlockTop || isEdgeTop;
+
+                      // Bestimme Border-Radius für Ecken (nur für Eck-Zellen)
+                      // Die Border-Radius muss auf den äußeren Ecken sein und mit rounded-2xl (16px) übereinstimmen
+                      const borderRadius = 
+                        r === 0 && c === 0 ? '16px 0 0 0' :
+                        r === 0 && c === 8 ? '0 16px 0 0' :
+                        r === 8 && c === 0 ? '0 0 0 16px' :
+                        r === 8 && c === 8 ? '0 0 16px 0' : '0';
+
+                      return (
+                        <button
+                          key={`${r}-${c}`}
+                          onClick={() => handleCellClick(r, c)}
+                          className={`flex items-center justify-center text-xl font-semibold transition md:text-2xl lg:text-3xl ${
+                            isSelected
+                              ? ''
+                              : matchesFocus || isSameValue
+                              ? ''
+                              : isRelated
+                              ? ''
+                              : 'text-slate-700'
+                          } ${
+                            feedbackState === 'correct'
+                              ? 'animate-sudoku-pop'
+                              : ''
+                          } ${
+                            feedbackState === 'wrong'
+                              ? 'animate-sudoku-shake'
+                              : ''
+                          } ${
+                            cell.isInitial ? 'font-bold text-slate-900' : 'font-semibold text-slate-500'
+                          }`}
+                          style={{
+                            // Priorität 1: Fehlerzustände
+                            ...(isError ? {
+                              backgroundColor: '#dc2626',
+                              color: '#ffffff',
+                            } : feedbackState === 'wrong' ? {
+                              backgroundColor: '#dc2626',
+                              color: '#ffffff',
+                            } : feedbackState === 'correct' ? {
+                              backgroundColor: '#d1fae5',
+                              color: '#065f46',
+                            } : {}),
+                            // Priorität 2: Sandy's matchesFocus/isSameValue UND isSelected - Gold (wenn das Feld eine Zahl hat)
+                            ...((matchesFocus || isSameValue || (isSelected && board[r][c].value !== 0)) && !isError && !feedbackState ? {
+                              backgroundColor: '#f5e8f0',
+                              color: '#d4a55e',
+                            } : {}),
+                            // Priorität 4: Sandy's isSelected ohne Zahl - Grau
+                            ...(isSelected && board[r][c].value === 0 && !isError && !feedbackState ? {
+                              backgroundColor: '#e2e8f0',
+                              color: '#475569',
+                            } : {}),
+                            // Priorität 6: Basis-Hintergrund (nur wenn keine speziellen Zustände)
+                            ...((!isSelected && !matchesFocus && !isSameValue && !isError && !feedbackState && !cell.isInitial) ? {
+                              backgroundColor: '#ffffff',
+                              color: '#64748b',
+                            } : {}),
+                            // Priorität 3: Sandy's isRelated - Helles Lila mit 80% Deckkraft (ZUERST, damit vorgegebene Felder darüber liegen)
+                            ...(isRelated && !matchesFocus && !isSameValue && !(isSelected && board[r][c].value !== 0) && !isError && !feedbackState ? {
+                              backgroundColor: cell.isInitial ? 'rgba(245, 232, 240, 0.5)' : 'rgba(245, 232, 240, 0.8)',
+                              color: '#475569',
+                            } : {}),
+                            // Priorität 5: Vorgegebene Felder hervorheben (NACH isRelated, überschreibt diese)
+                            ...((!isSelected && !matchesFocus && !isSameValue && !isError && !feedbackState && cell.isInitial) ? {
+                              backgroundColor: '#e2e8f0',
+                              color: '#475569',
+                            } : {}),
+                            // Border-Radius für Ecken
+                            borderRadius: borderRadius,
+                            // Negative Margins für dicke Borders, damit sie über dünne Borders gehen
+                            // ABER: Eck-Zellen haben keine negativen Margins nach außen
+                            // Differenz zwischen dicken (5px) und dünnen (1px) Borders ist 4px
+                            marginRight: (hasThickRight && !isEdgeRight) ? '-4px' : '0',
+                            marginBottom: (hasThickBottom && !isEdgeBottom) ? '-4px' : '0',
+                            marginLeft: (hasThickLeft && !isEdgeLeft) ? '-4px' : '0',
+                            marginTop: (hasThickTop && !isEdgeTop) ? '-4px' : '0',
+                            // Position und z-index für Layering (muss vor Borders kommen)
+                            // Zellen mit dicken Borders bekommen höheren z-index, damit sie über dünne Borders liegen
+                            position: 'relative',
+                            zIndex: (hasThickRight || hasThickBottom || hasThickLeft || hasThickTop) ? 20 : 5,
+                            // Borders: Dicke (5px) für Außenränder und Blockgrenzen, dünne (1px) für Zellgrenzen
+                            // Sandy verwendet goldene Farben (#d4a55e für dick, #c1944d für dünn)
+                            // Für Eck-Zellen: Nur die äußeren Borders sind dick, die inneren können dünn sein
+                            borderRight: hasThickRight ? '5px solid #d4a55e' : '1px solid #c1944d',
+                            borderBottom: hasThickBottom ? '5px solid #d4a55e' : '1px solid #c1944d',
+                            borderLeft: hasThickLeft ? '5px solid #d4a55e' : '1px solid #c1944d',
+                            borderTop: hasThickTop ? '5px solid #d4a55e' : '1px solid #c1944d',
+                            // Overflow hidden für saubere Ecken
+                            overflow: 'hidden',
+                            // Box-sizing damit Borders innerhalb der Zelle bleiben
+                            boxSizing: 'border-box',
+                          } as React.CSSProperties}
+                        >
+                          {cell.value !== 0 ? (
+                            cell.value
+                          ) : (
+                            <div className="grid h-full w-full grid-cols-3 grid-rows-3 text-[10px] md:text-xs lg:text-sm" style={{ color: '#94a3b8' } as React.CSSProperties}>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+                                <span
+                                  key={n}
+                                  className={`flex items-center justify-center ${
+                                    cell.notes.has(n) ? 'opacity-100' : 'opacity-0'
+                                  }`}
+                                >
+                                  {n}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    }),
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="w-full aspect-square mx-auto rounded-2xl border-3 bg-slate-100 p-0 shadow-inner md:max-w-[min(95vw,800px)] lg:max-w-[min(95vw,900px)] overflow-hidden" style={{ borderColor: playerName === 'Noe' ? '#8b8b8b' : '#475569', borderWidth: '4px', borderStyle: 'solid' } as React.CSSProperties}>
+                <div className="grid h-full w-full grid-rows-9 grid-cols-9 gap-0">
                 {board.flatMap((row, r) =>
                   row.map((cell, c) => {
                       const isSelected = selected?.r === r && selected?.c === c;
@@ -2270,12 +2737,14 @@ const App: React.FC = () => {
                       <button
                         key={`${r}-${c}`}
                         onClick={() => handleCellClick(r, c)}
-                        className={`flex items-center justify-center text-xl font-semibold transition md:text-2xl lg:text-3xl ${
-                          // Abgerundete Ecken für die Eck-Zellen
-                          r === 0 && c === 0 ? 'rounded-tl-xl' :
-                          r === 0 && c === 8 ? 'rounded-tr-xl' :
-                          r === 8 && c === 0 ? 'rounded-bl-xl' :
-                          r === 8 && c === 8 ? 'rounded-br-xl' : ''
+                        className={`flex items-center justify-center text-xl font-semibold transition-all duration-200 md:text-2xl lg:text-3xl ${
+                          playerName === 'Sandy' ? 'rounded-lg' : (
+                            // Abgerundete Ecken für die Eck-Zellen (nur für andere Spieler)
+                            r === 0 && c === 0 ? 'rounded-tl-xl' :
+                            r === 0 && c === 8 ? 'rounded-tr-xl' :
+                            r === 8 && c === 0 ? 'rounded-bl-xl' :
+                            r === 8 && c === 8 ? 'rounded-br-xl' : ''
+                          )
                         } ${
                           isSelected
                             ? (playerName === 'Noe' ? '' : (playerName === 'Sandy' ? '' : 'bg-slate-200 text-slate-900 shadow-inner'))
@@ -2300,9 +2769,11 @@ const App: React.FC = () => {
                           ...(isError ? {
                             backgroundColor: '#dc2626',
                             color: '#ffffff',
+                            boxShadow: playerName === 'Sandy' ? '0 2px 8px rgba(220, 38, 38, 0.3)' : undefined,
                           } : feedbackState === 'wrong' ? {
                             backgroundColor: '#dc2626',
                             color: '#ffffff',
+                            boxShadow: playerName === 'Sandy' ? '0 2px 8px rgba(220, 38, 38, 0.3)' : undefined,
                           } : feedbackState === 'correct' && playerName === 'Noe' ? {
                             color: '#ffffff',
                             backgroundColor: (!isSelected && !matchesFocus && !isSameValue && !isRelated) ? '#3f3f3f' : undefined,
@@ -2311,16 +2782,14 @@ const App: React.FC = () => {
                           ...((matchesFocus || isSameValue || (isSelected && board[r][c].value !== 0)) && playerName === 'Sandy' && !isError && !feedbackState ? {
                             backgroundColor: '#f5e8f0',
                             color: '#d4a55e',
-                          } : {}),
-                          // Priorität 3: Sandy's isRelated - Grau (nur wenn nicht bereits gold)
-                          ...(isRelated && playerName === 'Sandy' && !matchesFocus && !isSameValue && !(isSelected && board[r][c].value !== 0) && !isError && !feedbackState ? {
-                            backgroundColor: '#e2e8f0',
-                            color: '#475569',
+                            boxShadow: '0 4px 12px rgba(212, 165, 94, 0.25), 0 2px 4px rgba(212, 165, 94, 0.15)',
+                            transform: 'scale(1.02)',
                           } : {}),
                           // Priorität 4: Sandy's isSelected ohne Zahl - Grau
                           ...(isSelected && playerName === 'Sandy' && board[r][c].value === 0 && !isError && !feedbackState ? {
                             backgroundColor: '#e2e8f0',
                             color: '#475569',
+                            boxShadow: '0 2px 6px rgba(71, 85, 105, 0.15)',
                           } : {}),
                           // Priorität 5: isSelected für Noe
                           ...(isSelected && playerName === 'Noe' && !isError && !feedbackState ? {
@@ -2332,33 +2801,63 @@ const App: React.FC = () => {
                             backgroundColor: '#47ad5a',
                             color: '#ffffff',
                           } : {}),
-                          // Priorität 7: isRelated für Noe (aber nicht wenn selected)
+                          // Priorität 8: Basis-Hintergrund (nur wenn keine speziellen Zustände)
+                          ...((!isSelected && !matchesFocus && !isSameValue && !isError && !feedbackState && !cell.isInitial) ? {
+                            backgroundColor: playerName === 'Sandy' ? '#ffffff' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
+                            color: playerName === 'Noe' ? '#ffffff' : (playerName === 'Sandy' ? '#475569' : undefined),
+                            boxShadow: playerName === 'Sandy' ? '0 1px 3px rgba(0, 0, 0, 0.08)' : undefined,
+                          } : {}),
+                          // Priorität 3: Sandy's isRelated - Helles Lila mit 80% Deckkraft (ZUERST, damit vorgegebene Felder darüber liegen)
+                          ...(isRelated && playerName === 'Sandy' && !matchesFocus && !isSameValue && !(isSelected && board[r][c].value !== 0) && !isError && !feedbackState ? {
+                            backgroundColor: cell.isInitial ? 'rgba(245, 232, 240, 0.5)' : 'rgba(245, 232, 240, 0.8)',
+                            color: '#475569',
+                            boxShadow: '0 2px 6px rgba(71, 85, 105, 0.15)',
+                          } : {}),
+                          // Priorität 9: isRelated für Noe - Hintergrundfarbe mit 80% Deckkraft (ZUERST, damit vorgegebene Felder darüber liegen)
                           ...(isRelated && playerName === 'Noe' && !isSelected && !isError && !feedbackState ? {
-                            backgroundColor: '#2f733b',
+                            backgroundColor: cell.isInitial ? 'rgba(63, 63, 63, 0.5)' : 'rgba(63, 63, 63, 0.8)',
                             color: '#ffffff',
                           } : {}),
-                          // Priorität 6: Basis-Hintergrund (nur wenn keine speziellen Zustände)
-                          ...((!isSelected && !matchesFocus && !isSameValue && !isRelated && !isError && !feedbackState) ? {
-                            backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-                            color: playerName === 'Noe' ? '#ffffff' : undefined,
+                          // Priorität 10: isRelated für andere Spieler - Hintergrundfarbe mit 80% Deckkraft (ZUERST, damit vorgegebene Felder darüber liegen)
+                          ...(isRelated && playerName !== 'Sandy' && playerName !== 'Noe' && !isSelected && !matchesFocus && !isSameValue && !isError && !feedbackState ? {
+                            backgroundColor: cell.isInitial ? 'rgba(222, 219, 210, 0.5)' : 'rgba(222, 219, 210, 0.8)',
+                            color: undefined,
                           } : {}),
-                          // Negative Margins für dicke Borders, damit sie über dünne Borders gehen
-                          marginRight: ((c + 1) % 3 === 0 || c === 8) ? '-3px' : '0',
-                          marginBottom: ((r + 1) % 3 === 0 || r === 8) ? '-3px' : '0',
-                          marginLeft: (c === 0 || (c % 3 === 0 && c !== 0)) ? '-3px' : '0',
-                          marginTop: (r === 0 || (r % 3 === 0 && r !== 0)) ? '-3px' : '0',
-                          // Position und z-index für Layering (muss vor Borders kommen)
-                          // Zellen mit dicken Borders bekommen höheren z-index, damit sie über dünne Borders liegen
-                          position: 'relative',
-                          zIndex: ((c + 1) % 3 === 0 || c === 8 || c === 0 || (c % 3 === 0 && c !== 0)) || 
-                                  ((r + 1) % 3 === 0 || r === 8 || r === 0 || (r % 3 === 0 && r !== 0)) ? 20 : 5,
-                          // Vollständige Border-Logik: Jede Zelle bekommt ALLE ihre Borders
-                          // Diese Borders müssen IMMER zuletzt gesetzt werden, damit sie nicht überschrieben werden
-                          // Dicke Rahmen (4px) für Blockgrenzen und äußere Ränder, dünne Rahmen (1px) für Zellgrenzen
-                          borderRight: ((c + 1) % 3 === 0 || c === 8) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
-                          borderBottom: ((r + 1) % 3 === 0 || r === 8) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
-                          borderLeft: (c === 0 || (c % 3 === 0 && c !== 0)) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
-                          borderTop: (r === 0 || (r % 3 === 0 && r !== 0)) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                          // Priorität 7: Vorgegebene Felder hervorheben (NACH isRelated, überschreibt diese)
+                          ...((!isSelected && !matchesFocus && !isSameValue && !isError && !feedbackState && cell.isInitial) ? {
+                            backgroundColor: playerName === 'Sandy' ? '#e2e8f0' : (playerName === 'Noe' ? '#2f733b' : '#e2e8f0'),
+                            color: playerName === 'Noe' ? '#ffffff' : (playerName === 'Sandy' ? '#475569' : '#475569'),
+                            boxShadow: playerName === 'Sandy' ? '0 2px 6px rgba(71, 85, 105, 0.15)' : undefined,
+                          } : {}),
+                          // Sandy: Keine Borders, sondern nur Schatten und Abstände
+                          ...(playerName === 'Sandy' ? {
+                            border: 'none',
+                            margin: '0',
+                            position: 'relative',
+                            zIndex: 1,
+                          } : {
+                            // Negative Margins für dicke Borders, damit sie über dünne Borders gehen
+                            marginRight: ((c + 1) % 3 === 0 || c === 8) ? '-3px' : '0',
+                            marginBottom: ((r + 1) % 3 === 0 || r === 8) ? '-3px' : '0',
+                            marginLeft: (c === 0 || (c % 3 === 0 && c !== 0)) ? '-3px' : '0',
+                            marginTop: (r === 0 || (r % 3 === 0 && r !== 0)) ? '-3px' : '0',
+                            // Position und z-index für Layering (muss vor Borders kommen)
+                            // Zellen mit dicken Borders bekommen höheren z-index, damit sie über dünne Borders liegen
+                            position: 'relative',
+                            zIndex: ((c + 1) % 3 === 0 || c === 8 || c === 0 || (c % 3 === 0 && c !== 0)) || 
+                                    ((r + 1) % 3 === 0 || r === 8 || r === 0 || (r % 3 === 0 && r !== 0)) ? 20 : 5,
+                            // Vollständige Border-Logik: Jede Zelle bekommt ALLE ihre Borders
+                            // Diese Borders müssen IMMER zuletzt gesetzt werden, damit sie nicht überschrieben werden
+                            // Dicke Rahmen (4px) für Blockgrenzen und äußere Ränder, dünne Rahmen (1px) für Zellgrenzen
+                            borderRight: ((c + 1) % 3 === 0 || c === 8) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                            borderBottom: ((r + 1) % 3 === 0 || r === 8) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                            borderLeft: (c === 0 || (c % 3 === 0 && c !== 0)) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                            borderTop: (r === 0 || (r % 3 === 0 && r !== 0)) ? `4px solid ${playerName === 'Noe' ? '#8b8b8b' : '#64748b'}` : `1px solid ${playerName === 'Noe' ? '#8b8b8b' : '#94a3b8'}`,
+                            // Box-sizing damit Borders innerhalb der Zelle bleiben
+                            boxSizing: 'border-box',
+                            // Overflow hidden für saubere Ecken
+                            overflow: 'hidden',
+                          }),
                           
                         } as React.CSSProperties}
                       >
@@ -2383,17 +2882,11 @@ const App: React.FC = () => {
                   }),
                 )}
               </div>
-            </div>
+              </div>
+            )}
           </section>
 
-          <section 
-            className="rounded-2xl border p-4 shadow-sm md:p-5 md:sticky md:top-6 md:self-start lg:p-6"
-            style={{ 
-              backgroundColor: playerName === 'Sandy' ? '#f7e1d7' : (playerName === 'Noe' ? '#3f3f3f' : '#dedbd2'),
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
-            } as React.CSSProperties}
-          >
+          <section className="p-2 md:p-5 md:sticky md:top-6 md:self-start lg:p-6">
           <div className="grid grid-cols-2 gap-2 text-sm text-slate-600 md:gap-3 md:text-base lg:gap-4 lg:text-lg">
             <button
               className="flex flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 md:px-4 md:py-3 lg:px-5 lg:py-4"
@@ -2427,11 +2920,9 @@ const App: React.FC = () => {
           </div>
 
           <div 
-            className="mt-4 rounded-2xl border p-3 md:p-4 md:mt-5 lg:p-5 lg:mt-6"
+            className="mt-4 p-3 md:p-4 md:mt-5 lg:p-5 lg:mt-6 rounded-2xl"
             style={{ 
-              backgroundColor: playerName === 'Noe' ? '#575757' : '#dedbd2',
-              borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
-              color: playerName === 'Noe' ? '#ffffff' : undefined
+              backgroundColor: playerName === 'Sandy' ? '#d4a55e' : (playerName === 'Noe' ? '#575757' : '#dedbd2')
             } as React.CSSProperties}
           >
             <div className="grid grid-rows-2 gap-3 md:gap-4 lg:gap-5">
@@ -2539,6 +3030,10 @@ const App: React.FC = () => {
                     setGameState('playing');
                   }}
                   className="w-full rounded-xl border border-slate-200 py-2 text-slate-700 md:py-2.5 md:text-base lg:py-3 lg:text-lg"
+                  style={{
+                    borderColor: playerName === 'Noe' ? '#3f3f3f' : '#e2e8f0',
+                    color: playerName === 'Noe' ? '#ffffff' : '#334155'
+                  } as React.CSSProperties}
                 >
                   Leaderboard ansehen
                 </button>
