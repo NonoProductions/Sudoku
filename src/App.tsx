@@ -22,6 +22,7 @@ import {
   BarChart3,
   Settings,
   Play,
+  XCircle,
 } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 
@@ -141,7 +142,7 @@ type TeamMember = {
 type TeamProgressEntry = {
   playerName: string;
   timerSeconds: number;
-  livesRemaining: number;
+  mistakes: number;
   completionPercent: number;
   status: string;
   updatedAt: string | null;
@@ -164,7 +165,6 @@ type FreePlayState = {
   board: Cell[][];
   solvedBoard: BoardType;
   difficulty: Difficulty;
-  lives: number;
   timer: number;
   gameState: GameState;
   mistakes: number;
@@ -258,7 +258,6 @@ const App: React.FC = () => {
   const [solvedBoard, setSolvedBoard] = useState<BoardType>([]);
   const [hasStartedGame, setHasStartedGame] = useState(false); // New state to track if a game is active
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
-  const [lives, setLives] = useState(3);
   const [timer, setTimer] = useState(0);
   const [completionTime, setCompletionTime] = useState<number | null>(null);
   const [isNoteMode, setIsNoteMode] = useState(false);
@@ -325,7 +324,7 @@ const App: React.FC = () => {
   const isDailyModeRef = useRef(false);
   const gameStateRef = useRef<GameState>('playing');
   const timerRef = useRef(0);
-  const livesRef = useRef(3);
+  const mistakesRef = useRef(0);
   const completionPercentRef = useRef(0);
   const statusRef = useRef('Noch nicht gestartet');
   const teammateName = useMemo(() => {
@@ -372,8 +371,8 @@ const App: React.FC = () => {
   }, [timer]);
 
   useEffect(() => {
-    livesRef.current = lives;
-  }, [lives]);
+    mistakesRef.current = mistakes;
+  }, [mistakes]);
 
 
   useEffect(() => {
@@ -558,7 +557,6 @@ const App: React.FC = () => {
         // Restore free play state
         setBoard(restoreState.board);
         setSolvedBoard(restoreState.solvedBoard);
-        setLives(restoreState.lives);
         setTimer(restoreState.timer);
         setCompletionTime(null);
         setGameState(restoreState.gameState);
@@ -589,7 +587,6 @@ const App: React.FC = () => {
 
         setBoard(newBoard);
         setSolvedBoard(solved);
-        setLives(3);
         setTimer(0);
         setCompletionTime(null);
         setGameState('playing');
@@ -688,7 +685,7 @@ const App: React.FC = () => {
       // Build query with OR conditions instead of .in() to avoid potential RLS issues
       let query = supabase
         .from('daily_progress')
-        .select('player_name, timer_seconds, lives_remaining, completion_percent, status, updated_at')
+        .select('player_name, timer_seconds, mistakes, completion_percent, status, updated_at')
         .eq('puzzle_id', targetPuzzleId);
       
       // Use OR filter for player names
@@ -712,7 +709,7 @@ const App: React.FC = () => {
         map.set(row.player_name.trim().toLowerCase(), {
           playerName: row.player_name,
           timerSeconds: row.timer_seconds ?? 0,
-          livesRemaining: row.lives_remaining ?? 0,
+          mistakes: row.mistakes ?? 0,
           completionPercent: row.completion_percent ?? 0,
           status: row.status ?? 'In Bearbeitung',
           updatedAt: row.updated_at ?? null,
@@ -774,7 +771,7 @@ const App: React.FC = () => {
       }
 
       // Check if there's saved progress for this puzzle
-      let savedProgress: { current_grid?: any; timer_seconds?: number; lives_remaining?: number; mistakes?: number } | null = null;
+      let savedProgress: { current_grid?: any; timer_seconds?: number; mistakes?: number } | null = null;
       setIsDailyCompleted(false); // Reset by default
       
       // Check if puzzle date has changed - if so, clear old progress
@@ -788,7 +785,7 @@ const App: React.FC = () => {
       if (playerName.trim()) {
         const { data: progressData, error: progressError } = await supabase
           .from('daily_progress')
-          .select('current_grid, timer_seconds, lives_remaining, completion_percent, status')
+          .select('current_grid, timer_seconds, mistakes, completion_percent, status')
           .eq('puzzle_id', puzzle.id)
           .eq('player_name', playerName.trim())
           .maybeSingle();
@@ -918,14 +915,13 @@ const App: React.FC = () => {
           // Board is valid, restore it
           setBoard(restoredBoard);
           setSolvedBoard(puzzle.solution_grid);
-          setLives(savedProgress.lives_remaining ?? 3);
+          setMistakes(savedProgress.mistakes ?? 0);
           setTimer(savedProgress.timer_seconds ?? 0);
           setGameState('playing');
           setSelected(null);
           setFocusValue(null);
           setCellFeedback({});
           setHistory([]);
-          setMistakes(0);
           setIsDailyMode(true);
           setDifficulty(puzzle.difficulty ?? difficulty);
           // Only set puzzleMeta if puzzle date is today
@@ -995,7 +991,6 @@ const App: React.FC = () => {
           board,
           solvedBoard,
           difficulty,
-          lives,
           timer,
           gameState,
           mistakes,
@@ -1030,7 +1025,7 @@ const App: React.FC = () => {
       }
       setShowDifficultyOptions(false);
     },
-    [isDailyMode, board, solvedBoard, difficulty, lives, timer, gameState, mistakes, history, selected, focusValue, cellFeedback, loadDailyPuzzle, applyPuzzleToState, startNewGame],
+    [isDailyMode, board, solvedBoard, difficulty, timer, gameState, mistakes, history, selected, focusValue, cellFeedback, loadDailyPuzzle, applyPuzzleToState, startNewGame],
   );
 
   const loadLeaderboard = useCallback(async () => {
@@ -1177,7 +1172,6 @@ const App: React.FC = () => {
         board,
         solvedBoard,
         difficulty,
-        lives,
         timer,
         gameState,
         mistakes,
@@ -1187,7 +1181,7 @@ const App: React.FC = () => {
         cellFeedback,
       });
     }
-  }, [isDailyMode, board, solvedBoard, difficulty, lives, timer, gameState, mistakes, history, selected, focusValue, cellFeedback]);
+  }, [isDailyMode, board, solvedBoard, difficulty, timer, gameState, mistakes, history, selected, focusValue, cellFeedback]);
 
   // Load daily puzzle in background when user is authenticated
   useEffect(() => {
@@ -1400,11 +1394,6 @@ const App: React.FC = () => {
 
     if (!isCorrect) {
       setMistakes((prev) => prev + 1);
-      setLives((l) => {
-        const next = l - 1;
-        if (next <= 0) setGameState('lost');
-        return next;
-      });
     }
 
     setHistory((prev) => [...prev, board]);
@@ -1570,7 +1559,7 @@ const App: React.FC = () => {
         player_name: playerName.trim(),
         puzzle_id: puzzleMeta.id,
         timer_seconds: timer,
-        lives_remaining: lives,
+        mistakes: mistakes,
         completion_percent: completionPercent,
         status: dailyStatusLabel,
         current_grid: currentGrid,
@@ -1595,7 +1584,7 @@ const App: React.FC = () => {
         console.error('FEHLER: Die Spalte "current_grid" existiert nicht in der daily_progress Tabelle. Bitte füge sie in Supabase hinzu (siehe SUPABASE_SETUP.md)');
       }
     }
-  }, [playerName, isDailyMode, puzzleMeta.id, solvedBoard.length, board, timer, lives, completionPercent, dailyStatusLabel]);
+  }, [playerName, isDailyMode, puzzleMeta.id, solvedBoard.length, board, timer, mistakes, completionPercent, dailyStatusLabel]);
 
   useEffect(() => {
     if (!playerName.trim() || !isDailyMode || !puzzleMeta.id || !solvedBoard.length) return;
@@ -1625,7 +1614,7 @@ const App: React.FC = () => {
           player_name: playerName.trim(),
           puzzle_id: puzzleMeta.id,
           timer_seconds: timerRef.current,
-          lives_remaining: livesRef.current,
+          mistakes: mistakesRef.current,
           completion_percent: completionPercentRef.current,
           status: statusRef.current,
           current_grid: currentGrid,
@@ -1801,8 +1790,8 @@ const App: React.FC = () => {
                    {selectedMode !== 'Täglisches Sodoku' && (
                      <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
                         <p className="text-xs font-bold uppercase tracking-wider opacity-60 pl-1">Schwierigkeit</p>
-                        <div className="grid grid-cols-3 gap-2">
-                           {['Easy', 'Medium', 'Hard'].map((diff) => (
+                        <div className="grid grid-cols-4 gap-2">
+                           {['Easy', 'Medium', 'Hard', 'Sandy'].map((diff) => (
                              <button
                                key={diff}
                                onClick={() => handleModeSwitch(diff as GameMode)}
@@ -1814,7 +1803,7 @@ const App: React.FC = () => {
                                  opacity: difficulty === diff ? 1 : 0.7
                                }}
                              >
-                               {diff === 'Easy' ? 'Leicht' : diff === 'Medium' ? 'Mittel' : 'Schwer'}
+                               {diff === 'Easy' ? 'Leicht' : diff === 'Medium' ? 'Mittel' : diff === 'Hard' ? 'Schwer' : 'Sandy'}
                              </button>
                            ))}
                         </div>
@@ -2322,16 +2311,16 @@ const App: React.FC = () => {
                     </p>
                   </div>
                   <div className="mt-4 flex items-center justify-between text-sm md:text-base lg:text-lg">
-                    <span className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Verbleibende Leben</span>
+                    <span className="text-xs uppercase tracking-wide text-slate-400 md:text-sm">Fehler</span>
                     <span className="flex items-center gap-1 font-semibold text-slate-900">
-                      <Heart className="h-3.5 w-3.5 text-rose-500 md:h-4 md:w-4 lg:h-5 lg:w-5" />
-                      {lives}
+                      <XCircle className="h-3.5 w-3.5 text-rose-500 md:h-4 md:w-4 lg:h-5 lg:w-5" />
+                      {mistakes}
                     </span>
                   </div>
                 </>
               ) : (
                 <p className="mt-4 text-sm text-slate-500 md:text-base lg:text-lg">
-                  Starte das heutige Sudoku, um Fortschritt, Zeit und Leben zu verfolgen.
+                  Starte das heutige Sudoku, um Fortschritt, Zeit und Fehler zu verfolgen.
                 </p>
               )}
             </div>
@@ -2409,7 +2398,7 @@ const App: React.FC = () => {
                               ) : progress ? (
                                 <p className="text-xs md:text-sm lg:text-base text-slate-600">
                                   {progress.status} · {formatTime(progress.timerSeconds)} · {progress.completionPercent}% ·
-                                  Leben {progress.livesRemaining}
+                                  Fehler {progress.mistakes}
                                 </p>
                               ) : null}
                             </div>
@@ -2539,6 +2528,7 @@ const App: React.FC = () => {
                  difficulty === 'Medium' ? 'Mittel' : 
                  difficulty === 'Hard' ? 'Schwer' : 
                  difficulty === 'Beginner' ? 'Anfänger' : 
+                 difficulty === 'Sandy' ? 'Sandy' : 
                  difficulty}
               </span>
             </div>
@@ -2548,8 +2538,8 @@ const App: React.FC = () => {
                 {formatTime(displayTime)}
               </span>
               <span className="flex items-center gap-1">
-                <Heart className="h-4 w-4 md:h-5 md:w-5 text-rose-500" />
-                {lives}
+                <XCircle className="h-4 w-4 md:h-5 md:w-5 text-rose-500" />
+                {mistakes}
               </span>
               <button
                 onClick={() => setView('menu')}
