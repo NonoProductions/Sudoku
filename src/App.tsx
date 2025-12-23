@@ -327,6 +327,7 @@ const App: React.FC = () => {
   const mistakesRef = useRef(0);
   const completionPercentRef = useRef(0);
   const statusRef = useRef('Noch nicht gestartet');
+  const previousPlayerNameRef = useRef<string>('');
   const teammateName = useMemo(() => {
     if (!teamMembers.length) return '';
     const teammate = teamMembers.find((member) => member.id !== profileId);
@@ -1231,6 +1232,75 @@ const App: React.FC = () => {
       }
     }
   }, [view, loadLeaderboard, isAuthenticated, playerName, loadDailyPuzzle]);
+
+  // Reload daily puzzle progress when player changes (for Sandy/Noe switching)
+  useEffect(() => {
+    // Only reload if player actually changed (not on initial mount)
+    const previousPlayer = previousPlayerNameRef.current;
+    const currentPlayer = playerName.trim();
+    
+    // Only reload if:
+    // 1. We have a previous player (not initial mount)
+    // 2. Player actually changed
+    // 3. We're in daily mode and have a puzzle loaded
+    if (previousPlayer && previousPlayer !== currentPlayer && isDailyMode && puzzleMeta.id && currentPlayer && isAuthenticated) {
+      // Save previous player's progress first (if any), then reload with new player's progress
+      const reloadPuzzle = async () => {
+        // First, save previous player's progress if we have a board state
+        if (board.length > 0 && solvedBoard.length > 0 && puzzleMeta.id) {
+          try {
+            // Serialize board state
+            const currentGrid = board.map(row => 
+              row.map(cell => ({
+                value: cell.value,
+                isInitial: cell.isInitial,
+                notes: Array.from(cell.notes),
+              }))
+            );
+            
+            // Validate board state before saving
+            const boardForValidation: BoardType = board.map(row => row.map(cell => cell.value));
+            if (isValidBoardState(boardForValidation)) {
+              // Calculate completion percent
+              const totalCells = 81;
+              const filledCells = boardForValidation.flat().filter(v => v !== 0).length;
+              const completionPercentValue = Math.round((filledCells / totalCells) * 100);
+              
+              // Determine status
+              const statusValue = gameState === 'won' ? 'Abgeschlossen' : 
+                                 gameState === 'lost' ? 'Aufgegeben' :
+                                 timer > 0 ? 'In Bearbeitung' : 'Gestartet';
+              
+              const payload = {
+                player_name: previousPlayer, // Save with previous player's name
+                puzzle_id: puzzleMeta.id,
+                timer_seconds: timer,
+                mistakes: mistakes,
+                completion_percent: completionPercentValue,
+                status: statusValue,
+                current_grid: currentGrid,
+                updated_at: new Date().toISOString(),
+              };
+              
+              await supabase.from('daily_progress').upsert(
+                payload,
+                { onConflict: 'player_name,puzzle_id' },
+              );
+            }
+          } catch (err) {
+            console.error('Error saving previous player progress:', err);
+          }
+        }
+        // Then reload the puzzle with the new player's progress
+        loadDailyPuzzle({ navigate: false });
+      };
+      reloadPuzzle();
+    }
+    
+    // Update ref for next comparison (after checking)
+    previousPlayerNameRef.current = currentPlayer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerName, isDailyMode, puzzleMeta.id, isAuthenticated]); // Depend on these to detect changes
 
   useEffect(() => {
     const today = getLocalDateString();
